@@ -75,7 +75,7 @@ struct shotData {
 void calculateNumer_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing, int32 *max_pulse_distance, int32 *coinc, int32 shot_file_num) {
 
 	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][0];
+	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
 		for (int channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
 			for (int channel_3 = channel_2 + 1; channel_3 < shot_data->channel_list.size(); channel_3++) {
@@ -143,100 +143,65 @@ void calculateNumer_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 	}
 }
 
-void calculateDenom_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing, int32 *max_pulse_distance, int32 *coinc, int32 shot_file_num) {
-
+void calculateDenom_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing, int32 *max_pulse_distance, int32 *denom, int32 shot_file_num) {
+	
 	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][0];
+	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
+
 	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
 		for (int channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
 			for (int channel_3 = channel_2 + 1; channel_3 < shot_data->channel_list.size(); channel_3++) {
-				std::vector<std::vector<int32>> dummy_2(shot_data->sorted_photon_tag_pointers[channel_1]);
-				std::vector<std::vector<int32>> dummy_3(shot_data->sorted_photon_tag_pointers[channel_1]);
-				int32 lower_pointer_2 = 0;
-				int32 lower_pointer_3 = 0;
-				for (int32 i = 0; i < shot_data->sorted_photon_tag_pointers[channel_1]; i++) {
-					int out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
-					if (!out_window) {
-						bool going = true;
-						int32 j = lower_pointer_2;
-						while (going) {
-							if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - (*max_pulse_distance * *pulse_spacing)) {
-								j++;
-								lower_pointer_2 = j;
-							}
-							else if (shot_data->sorted_photon_bins[channel_2][j] > shot_data->sorted_photon_bins[channel_1][i] + (*max_pulse_distance * *pulse_spacing)) {
-								going = false;
-							}
-							else {
-								if (shot_data->sorted_photon_bins[channel_2][j] != shot_data->sorted_photon_bins[channel_1][i]) {
-									if (((shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i]) % *pulse_spacing) == 0) {
-										dummy_2[i].push_back(((shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i]) / *pulse_spacing));
-									}
-								}
-								j++;
-							}
-							if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-								going = false;
-							}
-						}
-						going = true;
-						int32 k = lower_pointer_3;
-						while (going) {
-							if (shot_data->sorted_photon_bins[channel_3][k] < shot_data->sorted_photon_bins[channel_1][i] - (*max_pulse_distance * *pulse_spacing)) {
-								k++;
-								lower_pointer_3 = k;
-							}
-							else if (shot_data->sorted_photon_bins[channel_3][k] > shot_data->sorted_photon_bins[channel_1][i] + (*max_pulse_distance * *pulse_spacing)) {
-								going = false;
-							}
-							else {
-								if (shot_data->sorted_photon_bins[channel_3][k] != shot_data->sorted_photon_bins[channel_1][i]) {
-									if (((shot_data->sorted_photon_bins[channel_3][k] - shot_data->sorted_photon_bins[channel_1][i]) % *pulse_spacing) == 0) {
-										dummy_3[i].push_back(((shot_data->sorted_photon_bins[channel_3][k] - shot_data->sorted_photon_bins[channel_1][i]) / *pulse_spacing));
-									}
-								}
-								k++;
-							}
-							if (k > shot_data->sorted_photon_tag_pointers[channel_3]) {
-								going = false;
+				std::vector<std::vector<int32>> denom_counts(*max_pulse_distance * 2 + 1, std::vector<int32>(*max_pulse_distance * 2 + 1,0));
+				#pragma omp parallel for
+				for (int32 pulse_dist_1 = -*max_pulse_distance; pulse_dist_1 <= *max_pulse_distance; pulse_dist_1++) {
+					for (int32 pulse_dist_2 = -*max_pulse_distance; pulse_dist_2 <= *max_pulse_distance; pulse_dist_2++) {
+						if ((pulse_dist_1 != 0) && (pulse_dist_2 != 0) && (pulse_dist_1 != pulse_dist_2)) {
+							int32 tau_1 = *pulse_spacing * pulse_dist_1;
+							int32 tau_2 = *pulse_spacing * pulse_dist_2;
+							int i = 0;
+							int j = 0;
+							int k = 0;
+							while ((i < shot_data->sorted_photon_tag_pointers[channel_1]) && (j < shot_data->sorted_photon_tag_pointers[channel_2]) && (k < shot_data->sorted_photon_tag_pointers[channel_3])) {
+								//Check if we're outside the window of interest
+								int out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
+								//chan_1 > chan_2
+								int c1gc2 = shot_data->sorted_photon_bins[channel_1][i] > (shot_data->sorted_photon_bins[channel_2][j] - tau_1);
+								//Chan_1 > chan_3
+								int c1gc3 = shot_data->sorted_photon_bins[channel_1][i] > (shot_data->sorted_photon_bins[channel_3][k] - tau_2);
+								//Chan_1 == chan_2
+								int c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau_1);
+								//Chan_1 == chan_3
+								int c1ec3 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_3][k] - tau_2);
+
+								//Increment the running total if all three are equal and we're in the window
+								denom_counts[pulse_dist_1 + *max_pulse_distance][pulse_dist_2 + *max_pulse_distance] += !out_window && c1ec2 && c1ec3;
+
+								//Increment j if chan_2 < chan_1 or all three are equal
+								j += c1gc2 || (c1ec2 && c1ec3);
+								//Increment k if chan_3 < chan_1 or all three are equal
+								k += c1gc3 || (c1ec2 && c1ec3);
+
+								//Increment i if we're out the window or if chan_1 <= chan_2 and chan_1 <= chan_3
+								i += out_window || (!c1gc2 && !c1gc3);
 							}
 						}
 					}
 				}
-				for (int32 i = 0; i < shot_data->sorted_photon_tag_pointers[channel_1]; i++) {
-					if ((dummy_2[i].size() > 0) && (dummy_3[i].size() > 0)) {
-						for (int j = 0; j < dummy_2[i].size(); j++) {
-							for (int k = 0; k < dummy_3[i].size(); k++) {
-								int32 id_x,id_y;
-								if (dummy_2[i][j] != dummy_3[i][k]) {
-									if (dummy_2[i][j] < 0) {
-										id_x = dummy_2[i][j] + *max_pulse_distance;
-									}
-									else {
-										id_x = dummy_2[i][j] + *max_pulse_distance - 1;
-									}
-									if (dummy_3[i][k] < 0) {
-										id_y = dummy_3[i][k] + *max_pulse_distance;
-									}
-									else {
-										id_y = dummy_3[i][k] + *max_pulse_distance - 1;
-									}
-									int32 tot_id = id_y * (*max_pulse_distance * 2) + id_x;
-									coinc[tot_id + (*max_bin * 2 + 1) * (*max_bin * 2 + 1) + shot_file_num * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1) + (*max_pulse_distance * 2) * (*max_pulse_distance * 2))]++;
-								}
-							}
-						}
+				for (int32 pulse_dist_1 = -*max_pulse_distance; pulse_dist_1 <= *max_pulse_distance; pulse_dist_1++) {
+					for (int32 pulse_dist_2 = -*max_pulse_distance; pulse_dist_2 <= *max_pulse_distance; pulse_dist_2++) {
+						denom[0] += denom_counts[pulse_dist_1 + *max_pulse_distance][pulse_dist_2 + *max_pulse_distance];
 					}
 				}
 			}
 		}
 	}
+
 }
 
 void calculateNumer_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing, int32 *max_pulse_distance, int32 *coinc, int32 shot_file_num) {
 
 	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][0];
+	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
 		for (int channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
 			std::vector<std::vector<int32>> dummy_2(shot_data->sorted_photon_tag_pointers[channel_1]);
@@ -339,7 +304,7 @@ void calculateNumer_g2_new(shotData *shot_data, int32 *max_bin, int32 *pulse_spa
 	
 	//Get the start and stop clock bin
 	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][0];
+	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
 	//Loop over all the channels to be channel 1
 	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
@@ -442,7 +407,7 @@ void calculateNumer_g3_new(shotData *shot_data, int32 *max_bin, int32 *pulse_spa
 
 	//Get the start and stop clock bin
 	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][0];
+	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
 	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
 
@@ -877,11 +842,10 @@ void calculateNumer_g2_pulse_2(shotData *shot_data, int32 *min_bin_1, int32 *max
 	}
 }
 
-//Doesn't work!!!!
 void calculateDenom_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing, int32 *max_pulse_distance, int32 *denom, int32 shot_file_num) {
 
 	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][0];
+	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
 	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
 		for (int channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
@@ -900,7 +864,7 @@ void calculateDenom_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 						//Check if we have a common element increment
 						int c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau);
 						//Increment running total if channel 1 equals channel 2
-						denom_counts[pulse_dist] += !out_window && c1ec2;
+						denom_counts[pulse_dist + *max_pulse_distance] += !out_window && c1ec2;
 						//Increment channel 1 if it is greater than channel 2, equal to channel 2 or ouside of the window
 						i += (!c1gc2 || out_window);
 						j += (c1gc2 || c1ec2);
@@ -908,7 +872,7 @@ void calculateDenom_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 				}
 			}
 			for (int32 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
-				denom[0] += denom_counts[pulse_dist];
+				denom[0] += denom_counts[pulse_dist + *max_pulse_distance];
 			}
 		}
 	}
@@ -1105,8 +1069,7 @@ void sortAndBinBlock(std::vector<shotData> *shot_block, double bin_width, int nu
 	}
 }
 
-
-extern "C" void EXPORT getG3Correlations(char **file_list, int file_list_length, double max_time, double bin_width, double pulse_spacing, int max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int num_cpu_threads) {
+/*extern "C" void EXPORT getG3Correlations(char **file_list, int file_list_length, double max_time, double bin_width, double pulse_spacing, int max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int num_cpu_threads) {
 
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
@@ -1139,6 +1102,8 @@ extern "C" void EXPORT getG3Correlations(char **file_list, int file_list_length,
 	printf("Max Time\tBin Width\tPulse Spacing\tMax Pulse Distance\n");
 	printf("%fus\t%fns\t%fus\t%i\n", max_time * 1e6, bin_width * 1e9, pulse_spacing * 1e6, max_pulse_distance);
 
+	std::vector<int32> denom_counts(num_cpu_threads, 0);
+
 	//Processes files in blocks
 	for (int block_num = 0; block_num < blocks_req; block_num++) {
 		//Allocate a vector to hold a block of shot_data
@@ -1156,7 +1121,7 @@ extern "C" void EXPORT getG3Correlations(char **file_list, int file_list_length,
 			if ((shot_block)[shot_file_num].file_load_completed) {
 				calculateNumer_g3(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num);
 				if (calc_norm){
-					calculateDenom_g3(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num);
+					calculateDenom_g3(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[shot_file_num]), shot_file_num);
 				}
 			}
 		}
@@ -1170,15 +1135,14 @@ extern "C" void EXPORT getG3Correlations(char **file_list, int file_list_length,
 			if (j < ((2 * (max_bin)+1) * (2 * (max_bin)+1))) {
 				PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + i * (((2 * (max_bin)+1) * (2 * (max_bin)+1)) + (max_pulse_distance * 2) * (max_pulse_distance * 2))]));
 			}
-			else {
-				denom[0] += coinc[j + i * (((2 * (max_bin)+1) * (2 * (max_bin)+1)) + (max_pulse_distance * 2) * (max_pulse_distance * 2))];
-			}
 		}
+		denom[0] += denom_counts[i];
 	}
 	free(coinc);
 }
+*/
 
-extern "C" void EXPORT getG3Correlations_new(char **file_list, int file_list_length, double max_time, double bin_width, double pulse_spacing, int max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int num_cpu_threads, int num_cpu_threads_proc) {
+extern "C" void EXPORT getG3Correlations(char **file_list, int file_list_length, double max_time, double bin_width, double pulse_spacing, int max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int num_cpu_threads_files, int num_cpu_threads_proc) {
 
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
@@ -1190,22 +1154,24 @@ extern "C" void EXPORT getG3Correlations_new(char **file_list, int file_list_len
 	int bin_pulse_spacing = (int)round(pulse_spacing / bin_width);
 
 	int32 *coinc;
-	coinc = (int32*)malloc((((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads * num_cpu_threads_proc * sizeof(int32));
+	coinc = (int32*)malloc((((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads_files * num_cpu_threads_proc * sizeof(int32));
 
-	for (int id = 0; id < (((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads * num_cpu_threads_proc; id++) {
+	for (int id = 0; id < (((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
 		coinc[id] = 0;
 	}
 
 	int blocks_req;
-	if (file_list_length < (num_cpu_threads)) {
+	if (file_list_length < (num_cpu_threads_files)) {
 		blocks_req = 1;
 	}
-	else if ((file_list_length % (num_cpu_threads)) == 0) {
-		blocks_req = file_list_length / (num_cpu_threads);
+	else if ((file_list_length % (num_cpu_threads_files)) == 0) {
+		blocks_req = file_list_length / (num_cpu_threads_files);
 	}
 	else {
-		blocks_req = file_list_length / (num_cpu_threads)+1;
+		blocks_req = file_list_length / (num_cpu_threads_files)+1;
 	}
+
+	std::vector<int32> denom_counts(num_cpu_threads_files, 0);
 
 	printf("Chunking %i files into %i blocks\n", file_list_length, blocks_req);
 	printf("Max Time\tBin Width\tPulse Spacing\tMax Pulse Distance\n");
@@ -1214,21 +1180,21 @@ extern "C" void EXPORT getG3Correlations_new(char **file_list, int file_list_len
 	//Processes files in blocks
 	for (int block_num = 0; block_num < blocks_req; block_num++) {
 		//Allocate a vector to hold a block of shot_data
-		std::vector<shotData> shot_block(num_cpu_threads);
+		std::vector<shotData> shot_block(num_cpu_threads_files);
 
 		//Populate the shot_block with data from file
-		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads);
+		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
 
 		//Sort tags and convert them to bins
-		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads);
+		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files);
 
 		//Processes files
-		#pragma omp parallel for num_threads(num_cpu_threads)
-		for (int shot_file_num = 0; shot_file_num < num_cpu_threads; shot_file_num++) {
+		#pragma omp parallel for num_threads(num_cpu_threads_files)
+		for (int shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
 			if ((shot_block)[shot_file_num].file_load_completed) {
 				calculateNumer_g3_new(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num,num_cpu_threads_proc);
 				if (calc_norm) {
-					calculateDenom_g3(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num);
+					calculateDenom_g3(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[shot_file_num]), shot_file_num);
 				}
 			}
 		}
@@ -1237,22 +1203,18 @@ extern "C" void EXPORT getG3Correlations_new(char **file_list, int file_list_len
 	}
 
 	//Collapse streamed coincidence counts down to regular numerator and denominator
-	for (int i = 0; i < num_cpu_threads; i++) {
+	for (int i = 0; i < num_cpu_threads_files; i++) {
 		for (int thread = 0; thread < num_cpu_threads_proc; thread++) {
 			for (int j = 0; j < (((2 * (max_bin)+1) * (2 * (max_bin)+1))); j++) {
-				if (j < ((2 * (max_bin)+1) * (2 * (max_bin)+1))) {
-					PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + thread * ((2 * (max_bin)+1) * (2 * (max_bin)+1)) + i * num_cpu_threads_proc * ((2 * (max_bin)+1) * (2 * (max_bin)+1))]));
-				}
-				else {
-					//denom[0] += coinc[j + i * (((2 * (max_bin)+1) * (2 * (max_bin)+1)) + (max_pulse_distance * 2) * (max_pulse_distance * 2))];
-				}
+				PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + thread * ((2 * (max_bin)+1) * (2 * (max_bin)+1)) + i * num_cpu_threads_proc * ((2 * (max_bin)+1) * (2 * (max_bin)+1))]));
 			}
 		}
+		denom[0] += denom_counts[i];
 	}
 	free(coinc);
 }
 
-extern "C" void EXPORT getG2Correlations(char **file_list, int file_list_length, double max_time, double bin_width, double pulse_spacing, int max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int num_cpu_threads) {
+/*extern "C" void EXPORT getG2Correlations(char **file_list, int file_list_length, double max_time, double bin_width, double pulse_spacing, int max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int num_cpu_threads) {
 
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
@@ -1281,6 +1243,8 @@ extern "C" void EXPORT getG2Correlations(char **file_list, int file_list_length,
 		blocks_req = file_list_length / (num_cpu_threads)+1;
 	}
 
+	std::vector<int32> denom_counts(num_cpu_threads, 0);
+
 	printf("Chunking %i files into %i blocks\n", file_list_length, blocks_req);
 	printf("Max Time\tBin Width\tPulse Spacing\tMax Pulse Distance\n");
 	printf("%fus\t%fns\t%fus\t%i\n", max_time * 1e6, bin_width * 1e9, pulse_spacing * 1e6, max_pulse_distance);
@@ -1302,7 +1266,7 @@ extern "C" void EXPORT getG2Correlations(char **file_list, int file_list_length,
 			if ((shot_block)[shot_file_num].file_load_completed) {
 				calculateNumer_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num);
 				if (calc_norm) {
-					//calculateDenom_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num);
+					calculateDenom_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[shot_file_num]), shot_file_num);
 				}
 			}
 		}
@@ -1316,16 +1280,15 @@ extern "C" void EXPORT getG2Correlations(char **file_list, int file_list_length,
 			if (j < (2 * (max_bin)+1)) {
 				PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + i * ((2 * (max_bin)+1) + (max_pulse_distance * 2))]));
 			}
-			else {
-				denom[0] += coinc[j + i * ((2 * (max_bin)+1) + (max_pulse_distance * 2))];
-			}
 		}
+		denom[0] += denom_counts[i];
 	}
 	free(coinc);
 
 }
+*/
 
-extern "C" void EXPORT getG2Correlations_new(char **file_list, int file_list_length, double max_time, double bin_width, double pulse_spacing, int max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int num_cpu_threads_files, int num_cpu_threads_proc) {
+extern "C" void EXPORT getG2Correlations(char **file_list, int file_list_length, double max_time, double bin_width, double pulse_spacing, int max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int num_cpu_threads_files, int num_cpu_threads_proc) {
 
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
@@ -1377,7 +1340,7 @@ extern "C" void EXPORT getG2Correlations_new(char **file_list, int file_list_len
 			if ((shot_block)[shot_file_num].file_load_completed) {
 				calculateNumer_g2_new(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num, num_cpu_threads_proc);
 				if (calc_norm) {
-					//calculateDenom_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, denom, shot_file_num);
+					calculateDenom_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[shot_file_num]), shot_file_num);
 				}
 			}
 		}
@@ -1394,12 +1357,13 @@ extern "C" void EXPORT getG2Correlations_new(char **file_list, int file_list_len
 				}
 			}
 		}
+		denom[0] += denom_counts[i];
 	}
 	free(coinc);
 
 }
 
-extern "C" void EXPORT getG2Correlations_pulse(char **file_list, int file_list_length, double max_time_tau, double bin_width, PyObject *numer, int32 *denom, int num_cpu_threads_files) {
+/*extern "C" void EXPORT getG2Correlations_pulse(char **file_list, int file_list_length, double max_time_tau, double bin_width, PyObject *numer, int32 *denom, int num_cpu_threads_files) {
 
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
@@ -1464,8 +1428,9 @@ extern "C" void EXPORT getG2Correlations_pulse(char **file_list, int file_list_l
 	free(coinc);
 
 }
+*/
 
-extern "C" void EXPORT getG2Correlations_pulse_2(char **file_list, int file_list_length, double min_tau_1, double max_tau_1, double min_tau_2, double max_tau_2, double bin_width, PyObject *numer, int32 *denom, int num_cpu_threads_files) {
+extern "C" void EXPORT getG2Correlations_pulse(char **file_list, int file_list_length, double min_tau_1, double max_tau_1, double min_tau_2, double max_tau_2, double bin_width, PyObject *numer, int32 *denom, int num_cpu_threads_files) {
 
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector

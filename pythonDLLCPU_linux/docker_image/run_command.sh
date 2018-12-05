@@ -6,10 +6,13 @@ then
         if [ "$1" == "command" ]
         then
                 echo "Processing..."
-                python /home/rbry/dummy_processor.py "$@"
+                python /dummy_processor.py "$@"
         elif [ "$1" == "file" ]
         then
                 echo "Running file"
+        elif [ "$1" == "jupyter" ]
+        then
+                jupyter notebook --ip=0.0.0.0 --no-browser --allow-root
         fi
 else
         echo "Nothing to do"

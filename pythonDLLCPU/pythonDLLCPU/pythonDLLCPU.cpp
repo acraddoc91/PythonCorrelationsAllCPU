@@ -25,17 +25,14 @@
 #define int32 __int32
 #define int64 __int64
 
-const int max_tags_length = 200000;
-const int max_clock_tags_length = 5000;
-const int max_channels = 3;
+const int64 max_tags_length = 200000;
+const int64 max_clock_tags_length = 5000;
+const int32 max_channels = 3;
 const size_t return_size = 3;
-const int file_block_size = 16;
+const int32 file_block_size = 16;
 const double tagger_resolution = 82.3e-12;
-const int num_gpu = 2;
-const int threads_per_cuda_block_numer = 64;
-//const int offset[3] = { 0, 219, 211 };
-const int offset[3] = { 0, 51, 56 };
-const int shared_mem_size = 4;
+//const int32 offset[3] = { 0, 219, 211 };
+const int64 offset[3] = { 0, 51, 56 };
 
 struct shotData {
 	bool file_load_completed;
@@ -46,44 +43,44 @@ struct shotData {
 	std::vector<int64> photon_tags;
 	std::vector<int64> clock_tags;
 	std::vector<std::vector<int64>> sorted_photon_tags;
-	std::vector<std::vector<int32>> sorted_photon_bins;
+	std::vector<std::vector<int64>> sorted_photon_bins;
 	std::vector<std::vector<int64>> sorted_clock_tags;
-	std::vector<std::vector<int32>> sorted_clock_bins;
-	std::vector<int32> sorted_photon_tag_pointers;
-	std::vector<int32> sorted_clock_tag_pointers;
+	std::vector<std::vector<int64>> sorted_clock_bins;
+	std::vector<int64> sorted_photon_tag_pointers;
+	std::vector<int64> sorted_clock_tag_pointers;
 
-	shotData() : sorted_photon_tags(max_channels, std::vector<int64>(max_tags_length, 0)), sorted_photon_bins(max_channels, std::vector<int32>(max_tags_length, 0)), sorted_photon_tag_pointers(max_channels, 0), sorted_clock_tags(2, std::vector<int64>(max_clock_tags_length, 0)), sorted_clock_bins(2, std::vector<int32>(max_clock_tags_length, 0)), sorted_clock_tag_pointers(2, 0) {}
+	shotData() : sorted_photon_tags(max_channels, std::vector<int64>(max_tags_length, 0)), sorted_photon_bins(max_channels, std::vector<int64>(max_tags_length, 0)), sorted_photon_tag_pointers(max_channels, 0), sorted_clock_tags(2, std::vector<int64>(max_clock_tags_length, 0)), sorted_clock_bins(2, std::vector<int64>(max_clock_tags_length, 0)), sorted_clock_tag_pointers(2, 0) {}
 };
 
-void calculateDenom_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing, int32 *max_pulse_distance, int32 *denom, int32 shot_file_num) {
+void calculateDenom_g3(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *denom, int32 shot_file_num) {
 	
-	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
+	int64 start_clock = shot_data->sorted_clock_bins[1][0];
+	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
-	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
-		for (int channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
-			for (int channel_3 = channel_2 + 1; channel_3 < shot_data->channel_list.size(); channel_3++) {
+	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
+		for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
+			for (int32 channel_3 = channel_2 + 1; channel_3 < shot_data->channel_list.size(); channel_3++) {
 				std::vector<std::vector<int32>> denom_counts(*max_pulse_distance * 2 + 1, std::vector<int32>(*max_pulse_distance * 2 + 1,0));
 				#pragma omp parallel for
-				for (int32 pulse_dist_1 = -*max_pulse_distance; pulse_dist_1 <= *max_pulse_distance; pulse_dist_1++) {
-					for (int32 pulse_dist_2 = -*max_pulse_distance; pulse_dist_2 <= *max_pulse_distance; pulse_dist_2++) {
+				for (int64 pulse_dist_1 = -*max_pulse_distance; pulse_dist_1 <= *max_pulse_distance; pulse_dist_1++) {
+					for (int64 pulse_dist_2 = -*max_pulse_distance; pulse_dist_2 <= *max_pulse_distance; pulse_dist_2++) {
 						if ((pulse_dist_1 != 0) && (pulse_dist_2 != 0) && (pulse_dist_1 != pulse_dist_2)) {
-							int32 tau_1 = *pulse_spacing * pulse_dist_1;
-							int32 tau_2 = *pulse_spacing * pulse_dist_2;
-							int i = 0;
-							int j = 0;
-							int k = 0;
+							int64 tau_1 = *pulse_spacing * pulse_dist_1;
+							int64 tau_2 = *pulse_spacing * pulse_dist_2;
+							int64 i = 0;
+							int64 j = 0;
+							int64 k = 0;
 							while ((i < shot_data->sorted_photon_tag_pointers[channel_1]) && (j < shot_data->sorted_photon_tag_pointers[channel_2]) && (k < shot_data->sorted_photon_tag_pointers[channel_3])) {
 								//Check if we're outside the window of interest
-								int out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
+								int32 out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
 								//chan_1 > chan_2
-								int c1gc2 = shot_data->sorted_photon_bins[channel_1][i] > (shot_data->sorted_photon_bins[channel_2][j] - tau_1);
+								int32 c1gc2 = shot_data->sorted_photon_bins[channel_1][i] > (shot_data->sorted_photon_bins[channel_2][j] - tau_1);
 								//Chan_1 > chan_3
-								int c1gc3 = shot_data->sorted_photon_bins[channel_1][i] > (shot_data->sorted_photon_bins[channel_3][k] - tau_2);
+								int32 c1gc3 = shot_data->sorted_photon_bins[channel_1][i] > (shot_data->sorted_photon_bins[channel_3][k] - tau_2);
 								//Chan_1 == chan_2
-								int c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau_1);
+								int32 c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau_1);
 								//Chan_1 == chan_3
-								int c1ec3 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_3][k] - tau_2);
+								int32 c1ec3 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_3][k] - tau_2);
 
 								//Increment the running total if all three are equal and we're in the window
 								denom_counts[pulse_dist_1 + *max_pulse_distance][pulse_dist_2 + *max_pulse_distance] += !out_window && c1ec2 && c1ec3;
@@ -99,8 +96,8 @@ void calculateDenom_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 						}
 					}
 				}
-				for (int32 pulse_dist_1 = -*max_pulse_distance; pulse_dist_1 <= *max_pulse_distance; pulse_dist_1++) {
-					for (int32 pulse_dist_2 = -*max_pulse_distance; pulse_dist_2 <= *max_pulse_distance; pulse_dist_2++) {
+				for (int64 pulse_dist_1 = -*max_pulse_distance; pulse_dist_1 <= *max_pulse_distance; pulse_dist_1++) {
+					for (int64 pulse_dist_2 = -*max_pulse_distance; pulse_dist_2 <= *max_pulse_distance; pulse_dist_2++) {
 						denom[0] += denom_counts[pulse_dist_1 + *max_pulse_distance][pulse_dist_2 + *max_pulse_distance];
 					}
 				}
@@ -110,16 +107,16 @@ void calculateDenom_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 
 }
 
-int32 first_above_binary_search(std::vector<int32> *a, int32 N, int32 b) {
-	int32 L = 0;
-	int32 R = N - 1;
-	int32 return_val;
+int64 first_above_binary_search(std::vector<int64> *a, int64 N, int64 b) {
+	int64 L = 0;
+	int64 R = N - 1;
+	int64 return_val;
 	if ((*a)[N - 1] < b) {
 		return_val = N;
 	}
 	else {
 		while (L <= R) {
-			int32 m = floor((L + R) / 2);
+			int64 m = (int64)floor((L + R) / 2);
 			if ((*a)[m] < b) {
 				L = m + 1;
 			}
@@ -139,16 +136,16 @@ int32 first_above_binary_search(std::vector<int32> *a, int32 N, int32 b) {
 	return return_val;
 }
 
-int32 first_below_binary_search(std::vector<int32> *a, int32 N, int32 b) {
-	int32 L = 0;
-	int32 R = N - 1;
-	int32 return_val;
+int64 first_below_binary_search(std::vector<int64> *a, int64 N, int64 b) {
+	int64 L = 0;
+	int64 R = N - 1;
+	int64 return_val;
 	if ((*a)[0] > b) {
 		return_val = -1;
 	}
 	else {
 		while (L <= R) {
-			int32 m = floor((L + R) / 2);
+			int64 m = (int64)floor((L + R) / 2);
 			if (m == N - 1) {
 				return m;
 				L = R + 1;
@@ -168,18 +165,18 @@ int32 first_below_binary_search(std::vector<int32> *a, int32 N, int32 b) {
 	return return_val;
 }
 
-void calculateNumer_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing, int32 *max_pulse_distance, int32 *coinc, int32 shot_file_num, int32 num_cpu_threads_proc) {
+void calculateNumer_g2(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *coinc, int32 shot_file_num, int32 num_cpu_threads_proc) {
 	
 	//Get the start and stop clock bin
-	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
+	int64 start_clock = shot_data->sorted_clock_bins[1][0];
+	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
 	//Loop over all the channels to be channel 1
-	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
+	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
 
 		//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
-		int32 low_index;
-		int32 high_index;
+		int64 low_index;
+		int64 high_index;
 		//Figure out which indices in the first thread we can ignore
 		#pragma omp parallel for
 		for (int32 i = 0; i < 2; i++) {
@@ -192,17 +189,17 @@ void calculateNumer_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 		}
 
 		//Split the remaining indices between the work threads we have
-		int32 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
-		for (int channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
+		int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
+		for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
 
 			//Vector to hold the relevant indices on channel 2, for each tag on channel 1, that falls with the max/min tau
-			std::vector<std::vector<int32>> channel_2_indices(high_index - low_index + 1, std::vector<int32>(2));
+			std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
 			#pragma omp parallel for num_threads(num_cpu_threads_proc)
 			for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
 				
 				//Find out form this thread what the first and last indices to work on are
-				int32 first_index = thread*indices_per_thread + low_index;
-				int32 last_index;
+				int64 first_index = thread*indices_per_thread + low_index;
+				int64 last_index;
 				if (thread == num_cpu_threads_proc - 1) {
 					last_index = high_index;
 				}
@@ -211,19 +208,19 @@ void calculateNumer_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 				}
 
 				//Do a binary search to find the first and last relevant tag on channel 2 for the first tag on channel 1 that the thread is working on
-				int32 lower_pointer = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);;
-				int32 upper_pointer = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
+				int64 lower_pointer = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);;
+				int64 upper_pointer = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
 
 				//Save the relevant tags on channel 2
 				channel_2_indices[first_index-low_index][0] = lower_pointer;
 				channel_2_indices[first_index-low_index][1] = upper_pointer;
 
 				//Loop over all the channel 1 indices this thread needs to work on
-				for (int32 i = first_index + 1; i <= last_index; i++) {
+				for (int64 i = first_index + 1; i <= last_index; i++) {
 
 					//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
 					bool going = true;
-					int32 j = lower_pointer;
+					int64 j = lower_pointer;
 					while (going) {
 						if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
 							j++;
@@ -260,9 +257,9 @@ void calculateNumer_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 					channel_2_indices[i - low_index][1] = upper_pointer;
 				}
 				//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
-				for (int32 i = first_index; i <= last_index; i++) {
-					for (int j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
-						int32 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
+				for (int64 i = first_index; i <= last_index; i++) {
+					for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
+						int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
 						coinc[id_x + thread * ((*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc * ((*max_bin * 2 + 1))]++;
 					}
 				}
@@ -271,20 +268,20 @@ void calculateNumer_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 	}
 }
 
-void calculateNumer_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing, int32 *max_pulse_distance, int32 *coinc, int32 shot_file_num, int32 num_cpu_threads_proc) {
+void calculateNumer_g3(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *coinc, int32 shot_file_num, int32 num_cpu_threads_proc) {
 
 	//Get the start and stop clock bin
-	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
+	int64 start_clock = shot_data->sorted_clock_bins[1][0];
+	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
-	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
+	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
 
 		//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
-		int32 low_index;
-		int32 high_index;
+		int64 low_index;
+		int64 high_index;
 		//Figure out which indices in the first thread we can ignore
 		#pragma omp parallel for
-		for (int32 i = 0; i < 2; i++) {
+		for (int8 i = 0; i < 2; i++) {
 			if (i == 0) {
 				low_index = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], *max_bin + *max_pulse_distance * *pulse_spacing + start_clock);
 			}
@@ -294,19 +291,19 @@ void calculateNumer_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 		}
 
 		//Split the remaining indices between the work threads we have
-		int32 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
+		int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
 
-		for (int channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
-			for (int channel_3 = channel_2 + 1; channel_3 < shot_data->channel_list.size(); channel_3++) {
+		for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
+			for (int32 channel_3 = channel_2 + 1; channel_3 < shot_data->channel_list.size(); channel_3++) {
 
 				//Vector to hold the relevant indices on channel 2 and 3, for each tag on channel 1, that falls with the max/min tau
-				std::vector<std::vector<int32>> channel_2_indices(high_index - low_index + 1, std::vector<int32>(2));
-				std::vector<std::vector<int32>> channel_3_indices(high_index - low_index + 1, std::vector<int32>(2));
+				std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
+				std::vector<std::vector<int64>> channel_3_indices(high_index - low_index + 1, std::vector<int64>(2));
 				#pragma omp parallel for num_threads(num_cpu_threads_proc)
 				for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
 					//Find out form this thread what the first and last indices to work on are
-					int32 first_index = thread*indices_per_thread + low_index;
-					int32 last_index;
+					int64 first_index = thread*indices_per_thread + low_index;
+					int64 last_index;
 					if (thread == num_cpu_threads_proc - 1) {
 						last_index = high_index;
 					}
@@ -315,10 +312,10 @@ void calculateNumer_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 					}
 
 					//Do a binary search to find the first and last relevant tag on channel 2 and 3 for the first tag on channel 1 that the thread is working on
-					int32 lower_pointer_2 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
-					int32 upper_pointer_2 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
-					int32 lower_pointer_3 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
-					int32 upper_pointer_3 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
+					int64 lower_pointer_2 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
+					int64 upper_pointer_2 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
+					int64 lower_pointer_3 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
+					int64 upper_pointer_3 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
 
 					//Save the relevant tags on channel 2 and 3
 					channel_2_indices[first_index - low_index][0] = lower_pointer_2;
@@ -326,10 +323,10 @@ void calculateNumer_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 					channel_3_indices[first_index - low_index][0] = lower_pointer_3;
 					channel_3_indices[first_index - low_index][1] = upper_pointer_3;
 
-					for (int32 i = first_index; i <= last_index; i++) {
+					for (int64 i = first_index; i <= last_index; i++) {
 						//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
 						bool going = true;
-						int32 j = lower_pointer_2;
+						int64 j = lower_pointer_2;
 						while (going) {
 							if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
 								j++;
@@ -404,13 +401,13 @@ void calculateNumer_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 						channel_3_indices[i - low_index][1] = upper_pointer_3;
 					}
 					//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
-					for (int32 i = first_index; i <= last_index; i++) {
-						for (int j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
-							for (int k = channel_3_indices[i - low_index][0]; k <= channel_3_indices[i - low_index][1]; k++) {
+					for (int64 i = first_index; i <= last_index; i++) {
+						for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
+							for (int64 k = channel_3_indices[i - low_index][0]; k <= channel_3_indices[i - low_index][1]; k++) {
 
-								int32 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
-								int32 id_y = shot_data->sorted_photon_bins[channel_3][k] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
-								int32 tot_id = id_y * (2 * (*max_bin) + 1) + id_x;
+								int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
+								int64 id_y = shot_data->sorted_photon_bins[channel_3][k] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
+								int64 tot_id = id_y * (2 * (*max_bin) + 1) + id_x;
 								coinc[tot_id + thread * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc  * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1))]++;
 
 							}
@@ -422,18 +419,18 @@ void calculateNumer_g3(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 	}
 }
 
-void calculateNumer_g2_pulse(shotData *shot_data, int32 *min_bin_1, int32 *max_bin_1, int32 *min_bin_2, int32 *max_bin_2, int32 *coinc, int32 shot_file_num) {
+void calculateNumer_g2_pulse(shotData *shot_data, int64 *min_bin_1, int64 *max_bin_1, int64 *min_bin_2, int64 *max_bin_2, int32 *coinc, int32 shot_file_num) {
 	//Get the start and stop clock bin
-	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
+	int64 start_clock = shot_data->sorted_clock_bins[1][0];
+	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
 	//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
-	int32 low_index;
-	int32 high_index;
+	int64 low_index;
+	int64 high_index;
 
 	//Check which min and max bin is bigger
-	int32 max_bin_check;
-	int32 min_bin_check;
+	int64 max_bin_check;
+	int64 min_bin_check;
 	if (*min_bin_1 < *min_bin_2) {
 		min_bin_check = *min_bin_1;
 	}
@@ -458,21 +455,21 @@ void calculateNumer_g2_pulse(shotData *shot_data, int32 *min_bin_1, int32 *max_b
 		}
 	}
 
-	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
-		for (int channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
+	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
+		for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
 
 			//Vector to hold the relevant indices on channel 2 and 3, for each tag on channel 1, that falls with the max/min tau
-			std::vector<std::vector<int32>> channel_1_indices(high_index - low_index + 1, std::vector<int32>(2));
-			std::vector<std::vector<int32>> channel_2_indices(high_index - low_index + 1, std::vector<int32>(2));
+			std::vector<std::vector<int64>> channel_1_indices(high_index - low_index + 1, std::vector<int64>(2));
+			std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
 			//Find out form this thread what the first and last indices to work on are
-			int32 first_index = low_index;
-			int32 last_index = high_index;
+			int64 first_index = low_index;
+			int64 last_index = high_index;
 
 			//Do a binary search to find the first and last relevant tag on channel 2 and 3 for the first tag on channel 1 that the thread is working on
-			int32 lower_pointer_1 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], shot_data->sorted_clock_bins[1][first_index] + *min_bin_1);
-			int32 upper_pointer_1 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], shot_data->sorted_clock_bins[1][first_index] + *max_bin_1);
-			int32 lower_pointer_2 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_clock_bins[1][first_index] + *min_bin_2);
-			int32 upper_pointer_2 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_clock_bins[1][first_index] + *max_bin_2);
+			int64 lower_pointer_1 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], shot_data->sorted_clock_bins[1][first_index] + *min_bin_1);
+			int64 upper_pointer_1 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], shot_data->sorted_clock_bins[1][first_index] + *max_bin_1);
+			int64 lower_pointer_2 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_clock_bins[1][first_index] + *min_bin_2);
+			int64 upper_pointer_2 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_clock_bins[1][first_index] + *max_bin_2);
 
 			//Save the relevant tags on channel 2 and 3
 			channel_1_indices[first_index - low_index][0] = lower_pointer_1;
@@ -480,10 +477,10 @@ void calculateNumer_g2_pulse(shotData *shot_data, int32 *min_bin_1, int32 *max_b
 			channel_2_indices[first_index - low_index][0] = lower_pointer_2;
 			channel_2_indices[first_index - low_index][1] = upper_pointer_2;
 
-			for (int32 i = first_index; i <= last_index; i++) {
+			for (int64 i = first_index; i <= last_index; i++) {
 				//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
 				bool going = true;
-				int32 j = lower_pointer_1;
+				int64 j = lower_pointer_1;
 				while (going) {
 					if (shot_data->sorted_photon_bins[channel_1][j] < shot_data->sorted_clock_bins[1][i] + *min_bin_1) {
 						j++;
@@ -558,13 +555,13 @@ void calculateNumer_g2_pulse(shotData *shot_data, int32 *min_bin_1, int32 *max_b
 				channel_2_indices[i - low_index][1] = upper_pointer_2;
 			}
 			//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
-			for (int32 i = first_index; i <= last_index; i++) {
-				for (int j = channel_1_indices[i - low_index][0]; j <= channel_1_indices[i - low_index][1]; j++) {
-					for (int k = channel_2_indices[i - low_index][0]; k <= channel_2_indices[i - low_index][1]; k++) {
+			for (int64 i = first_index; i <= last_index; i++) {
+				for (int64 j = channel_1_indices[i - low_index][0]; j <= channel_1_indices[i - low_index][1]; j++) {
+					for (int64 k = channel_2_indices[i - low_index][0]; k <= channel_2_indices[i - low_index][1]; k++) {
 
-						int32 id_x = shot_data->sorted_photon_bins[channel_1][j] - shot_data->sorted_clock_bins[1][i] - *min_bin_1;
-						int32 id_y = shot_data->sorted_photon_bins[channel_2][k] - shot_data->sorted_clock_bins[1][i] - *min_bin_2;
-						int32 tot_id = id_y * (*max_bin_1 - *min_bin_1+1) + id_x;
+						int64 id_x = shot_data->sorted_photon_bins[channel_1][j] - shot_data->sorted_clock_bins[1][i] - *min_bin_1;
+						int64 id_y = shot_data->sorted_photon_bins[channel_2][k] - shot_data->sorted_clock_bins[1][i] - *min_bin_2;
+						int64 tot_id = id_y * (*max_bin_1 - *min_bin_1+1) + id_x;
 						coinc[tot_id + ((*max_bin_1 - *min_bin_1 + 1) * (*max_bin_2 - *min_bin_2 + 1)) * shot_file_num]++;
 
 					}
@@ -574,27 +571,27 @@ void calculateNumer_g2_pulse(shotData *shot_data, int32 *min_bin_1, int32 *max_b
 	}
 }
 
-void calculateDenom_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing, int32 *max_pulse_distance, int32 *denom, int32 shot_file_num) {
+void calculateDenom_g2(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *denom, int32 shot_file_num) {
 
-	int32 start_clock = shot_data->sorted_clock_bins[1][0];
-	int32 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
+	int64 start_clock = shot_data->sorted_clock_bins[1][0];
+	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
-	for (int channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
-		for (int channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
+	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
+		for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
 			std::vector<int32> denom_counts(*max_pulse_distance * 2 + 1, 0);
 			#pragma omp parallel for
-			for (int32 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
+			for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
 				if (pulse_dist != 0) {
-					int32 tau = *pulse_spacing * pulse_dist;
-					int i = 0;
-					int j = 0;
+					int64 tau = *pulse_spacing * pulse_dist;
+					int64 i = 0;
+					int64 j = 0;
 					while ((i < shot_data->sorted_photon_tag_pointers[channel_1]) && (j < shot_data->sorted_photon_tag_pointers[channel_2])) {
 						//Check if we're outside the window of interest
-						int out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
+						int32 out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
 						//chan_1 > chan_2
-						int c1gc2 = shot_data->sorted_photon_bins[channel_1][i] >(shot_data->sorted_photon_bins[channel_2][j] - tau);
+						int32 c1gc2 = shot_data->sorted_photon_bins[channel_1][i] >(shot_data->sorted_photon_bins[channel_2][j] - tau);
 						//Check if we have a common element increment
-						int c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau);
+						int32 c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau);
 						//Increment running total if channel 1 equals channel 2
 						denom_counts[pulse_dist + *max_pulse_distance] += !out_window && c1ec2;
 						//Increment channel 1 if it is greater than channel 2, equal to channel 2 or ouside of the window
@@ -603,7 +600,7 @@ void calculateDenom_g2(shotData *shot_data, int32 *max_bin, int32 *pulse_spacing
 					}
 				}
 			}
-			for (int32 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
+			for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
 				denom[0] += denom_counts[pulse_dist + *max_pulse_distance];
 			}
 		}
@@ -685,13 +682,13 @@ void fileToShotData(shotData *shot_data, char* filename) {
 }
 
 //Reads relevant information for a block of files into shot_block
-void populateBlock(std::vector<shotData> *shot_block, std::vector<char *> *filelist, int block_num, int num_devices, int block_size) {
+void populateBlock(std::vector<shotData> *shot_block, std::vector<char *> *filelist, int32 block_num, int32 num_devices, int32 block_size) {
 	//Loop over the block size
-	for (int i = 0; i < block_size * num_devices; i++) {
+	for (int32 i = 0; i < block_size * num_devices; i++) {
 		//Default to assuming the block is corrupted
 		(*shot_block)[i].file_load_completed = false;
 		//Figure out the file id within the filelist
-		int file_id = block_num * block_size * num_devices + i;
+		int32 file_id = block_num * block_size * num_devices + i;
 		//Check the file_id isn't out of range of the filelist
 		if (file_id < filelist->size()) {
 			//Try to load file to shot_block
@@ -709,8 +706,8 @@ void populateBlock(std::vector<shotData> *shot_block, std::vector<char *> *filel
 
 //Process the time tags, assigning them to the correct channel, binning them appropriately and removing tags which do not fall in the clock mask
 void sortTags(shotData *shot_data) {
-	int32 i;
-	int high_count = 0;
+	int64 i;
+	int64 high_count = 0;
 	//Loop over all tags in clock_tags
 	for (i = 0; i < shot_data->clock_tags.size(); i++) {
 		//Check if clock tag is a high word
@@ -720,7 +717,7 @@ void sortTags(shotData *shot_data) {
 		}
 		else {
 			//Determine whether it is the rising (start) or falling (end) slope
-			int slope = ((shot_data->clock_tags[i] >> 28) & 1);
+			int8 slope = ((shot_data->clock_tags[i] >> 28) & 1);
 			//Put tag in appropriate clock tag vector and increment the pointer for said vector
 			shot_data->sorted_clock_tags[slope][shot_data->sorted_clock_tag_pointers[slope]] = ((shot_data->clock_tags[i] >> 1) & 0x7FFFFFF) + (high_count << 27) - ((shot_data->start_tags[1] >> 1) & 0x7FFFFFF);
 			shot_data->sorted_clock_tag_pointers[slope]++;
@@ -728,7 +725,7 @@ void sortTags(shotData *shot_data) {
 	}
 	high_count = 0;
 	//Clock pointer
-	int clock_pointer = 0;
+	int64 clock_pointer = 0;
 	//Loop over all tags in photon_tags
 	for (i = 0; i < shot_data->photon_tags.size(); i++) {
 		//Check if photon tag is a high word
@@ -753,7 +750,7 @@ void sortTags(shotData *shot_data) {
 					if (time_tag <= shot_data->sorted_clock_tags[0][clock_pointer - 1]) {
 						//printf("add tag tot data\n");
 						//Determine the index for given tag
-						int channel_index;
+						int32 channel_index;
 						//Bin tag and assign to appropriate vector
 						channel_index = shot_data->channel_map.find(((shot_data->photon_tags[i] >> 29) & 7) + 1)->second;
 						shot_data->sorted_photon_tags[channel_index][shot_data->sorted_photon_tag_pointers[channel_index]] = time_tag;
@@ -774,26 +771,26 @@ void sortTags(shotData *shot_data) {
 
 //Converts our tags to bins with a given bin width
 void tagsToBins(shotData *shot_data, double bin_width) {
-	int tagger_bins_per_bin_width = (int)round(bin_width / tagger_resolution);
-#pragma omp parallel for
-	for (int channel = 0; channel < shot_data->sorted_photon_bins.size(); channel++) {
-#pragma omp parallel for
-		for (int i = 0; i < shot_data->sorted_photon_tag_pointers[channel]; i++) {
+	int64 tagger_bins_per_bin_width = (int64)round(bin_width / tagger_resolution);
+	#pragma omp parallel for
+	for (int32 channel = 0; channel < shot_data->sorted_photon_bins.size(); channel++) {
+	#pragma omp parallel for
+		for (int32 i = 0; i < shot_data->sorted_photon_tag_pointers[channel]; i++) {
 			shot_data->sorted_photon_bins[channel][i] = (shot_data->sorted_photon_tags[channel][i] + offset[channel]) / tagger_bins_per_bin_width;
 		}
 	}
-	for (int slope = 0; slope <= 1; slope++) {
-#pragma omp parallel for
-		for (int i = 0; i < shot_data->sorted_clock_tag_pointers[slope]; i++) {
+	for (int32 slope = 0; slope <= 1; slope++) {
+	#pragma omp parallel for
+		for (int32 i = 0; i < shot_data->sorted_clock_tag_pointers[slope]; i++) {
 			shot_data->sorted_clock_bins[slope][i] = shot_data->sorted_clock_tags[slope][i] / tagger_bins_per_bin_width;
 		}
 	}
 }
 
 //Sorts photons and bins them for each file in a block
-void sortAndBinBlock(std::vector<shotData> *shot_block, double bin_width, int num_devices, int block_size) {
+void sortAndBinBlock(std::vector<shotData> *shot_block, double bin_width, int32 num_devices, int32 block_size) {
 #pragma omp parallel for
-	for (int shot_file_num = 0; shot_file_num < (block_size * num_devices); shot_file_num++) {
+	for (int32 shot_file_num = 0; shot_file_num < (block_size * num_devices); shot_file_num++) {
 		if ((*shot_block)[shot_file_num].file_load_completed) {
 			sortTags(&(*shot_block)[shot_file_num]);
 			tagsToBins(&(*shot_block)[shot_file_num], bin_width);
@@ -801,25 +798,25 @@ void sortAndBinBlock(std::vector<shotData> *shot_block, double bin_width, int nu
 	}
 }
 
-DLLEXPORT void getG3Correlations(char **file_list, int file_list_length, double max_time, double bin_width, double pulse_spacing, int max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int num_cpu_threads_files, int num_cpu_threads_proc) {
+DLLEXPORT void getG3Correlations(char **file_list, int32 file_list_length, double max_time, double bin_width, double pulse_spacing, int64 max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int32 num_cpu_threads_files, int32 num_cpu_threads_proc) {
 
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
-	for (int i = 0; i < file_list_length; i++) {
+	for (int32 i = 0; i < file_list_length; i++) {
 		filelist[i] = file_list[i];
 	}
 
-	int max_bin = (int)round(max_time / bin_width);
-	int bin_pulse_spacing = (int)round(pulse_spacing / bin_width);
+	int64 max_bin = (int64)round(max_time / bin_width);
+	int64 bin_pulse_spacing = (int64)round(pulse_spacing / bin_width);
 
 	int32 *coinc;
 	coinc = (int32*)malloc((((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads_files * num_cpu_threads_proc * sizeof(int32));
 
-	for (int id = 0; id < (((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
+	for (int32 id = 0; id < (((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
 		coinc[id] = 0;
 	}
 
-	int blocks_req;
+	int32 blocks_req;
 	if (file_list_length < (num_cpu_threads_files)) {
 		blocks_req = 1;
 	}
@@ -837,7 +834,7 @@ DLLEXPORT void getG3Correlations(char **file_list, int file_list_length, double 
 	printf("%fus\t%fns\t%fus\t%i\n", max_time * 1e6, bin_width * 1e9, pulse_spacing * 1e6, max_pulse_distance);
 
 	//Processes files in blocks
-	for (int block_num = 0; block_num < blocks_req; block_num++) {
+	for (int32 block_num = 0; block_num < blocks_req; block_num++) {
 		//Allocate a vector to hold a block of shot_data
 		std::vector<shotData> shot_block(num_cpu_threads_files);
 
@@ -849,7 +846,7 @@ DLLEXPORT void getG3Correlations(char **file_list, int file_list_length, double 
 
 		//Processes files
 		#pragma omp parallel for num_threads(num_cpu_threads_files)
-		for (int shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
+		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
 			if ((shot_block)[shot_file_num].file_load_completed) {
 				calculateNumer_g3(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num,num_cpu_threads_proc);
 				if (calc_norm) {
@@ -862,9 +859,9 @@ DLLEXPORT void getG3Correlations(char **file_list, int file_list_length, double 
 	}
 
 	//Collapse streamed coincidence counts down to regular numerator and denominator
-	for (int i = 0; i < num_cpu_threads_files; i++) {
-		for (int thread = 0; thread < num_cpu_threads_proc; thread++) {
-			for (int j = 0; j < (((2 * (max_bin)+1) * (2 * (max_bin)+1))); j++) {
+	for (int32 i = 0; i < num_cpu_threads_files; i++) {
+		for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
+			for (int32 j = 0; j < (((2 * (max_bin)+1) * (2 * (max_bin)+1))); j++) {
 				PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + thread * ((2 * (max_bin)+1) * (2 * (max_bin)+1)) + i * num_cpu_threads_proc * ((2 * (max_bin)+1) * (2 * (max_bin)+1))]));
 			}
 		}
@@ -873,24 +870,24 @@ DLLEXPORT void getG3Correlations(char **file_list, int file_list_length, double 
 	free(coinc);
 }
 
-DLLEXPORT void getG2Correlations(char **file_list, int file_list_length, double max_time, double bin_width, double pulse_spacing, int max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int num_cpu_threads_files, int num_cpu_threads_proc) {
+DLLEXPORT void getG2Correlations(char **file_list, int32 file_list_length, double max_time, double bin_width, double pulse_spacing, int64 max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int32 num_cpu_threads_files, int32 num_cpu_threads_proc) {
 
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
-	for (int i = 0; i < file_list_length; i++) {
+	for (int32 i = 0; i < file_list_length; i++) {
 		filelist[i] = file_list[i];
 	}
 
-	int max_bin = (int)round(max_time / bin_width);
-	int bin_pulse_spacing = (int)round(pulse_spacing / bin_width);
+	int64 max_bin = (int64)round(max_time / bin_width);
+	int64 bin_pulse_spacing = (int64)round(pulse_spacing / bin_width);
 
 	int32 *coinc;
 	coinc = (int32*)malloc(((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc * sizeof(int32));
-	for (int id = 0; id < ((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
+	for (int32 id = 0; id < ((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
 		coinc[id] = 0;
 	}
 
-	int blocks_req;
+	int32 blocks_req;
 	if (file_list_length < (num_cpu_threads_files)) {
 		blocks_req = 1;
 	}
@@ -908,7 +905,7 @@ DLLEXPORT void getG2Correlations(char **file_list, int file_list_length, double 
 	std::vector<int32> denom_counts(num_cpu_threads_files,0);
 
 	//Processes files in blocks
-	for (int block_num = 0; block_num < blocks_req; block_num++) {
+	for (int32 block_num = 0; block_num < blocks_req; block_num++) {
 		//Allocate a vector to hold a block of shot_data
 		std::vector<shotData> shot_block(num_cpu_threads_files);
 
@@ -921,7 +918,7 @@ DLLEXPORT void getG2Correlations(char **file_list, int file_list_length, double 
 
 		//Processes files
 		#pragma omp parallel for num_threads(num_cpu_threads_files)
-		for (int shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
+		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
 			if ((shot_block)[shot_file_num].file_load_completed) {
 				calculateNumer_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num, num_cpu_threads_proc);
 				if (calc_norm) {
@@ -934,9 +931,9 @@ DLLEXPORT void getG2Correlations(char **file_list, int file_list_length, double 
 	}
 
 	//Collapse streamed coincidence counts down to regular numerator and denominator
-	for (int i = 0; i < num_cpu_threads_files; i++) {
-		for (int thread = 0; thread < num_cpu_threads_proc; thread++) {
-			for (int j = 0; j < ((2 * (max_bin)+1) + (max_pulse_distance * 2)); j++) {
+	for (int32 i = 0; i < num_cpu_threads_files; i++) {
+		for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
+			for (int32 j = 0; j < ((2 * (max_bin)+1) + (max_pulse_distance * 2)); j++) {
 				if (j < (2 * (max_bin)+1)) {
 					PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + thread * ((2 * (max_bin)+1)) + i * num_cpu_threads_proc * ((2 * (max_bin)+1))]));
 				}
@@ -948,20 +945,20 @@ DLLEXPORT void getG2Correlations(char **file_list, int file_list_length, double 
 
 }
 
-DLLEXPORT void getG2Correlations_pulse(char **file_list, int file_list_length, double min_tau_1, double max_tau_1, double min_tau_2, double max_tau_2, double bin_width, PyObject *numer, int32 *denom, int num_cpu_threads_files) {
+DLLEXPORT void getG2Correlations_pulse(char **file_list, int32 file_list_length, double min_tau_1, double max_tau_1, double min_tau_2, double max_tau_2, double bin_width, PyObject *numer, int32 *denom, int32 num_cpu_threads_files) {
 
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
-	for (int i = 0; i < file_list_length; i++) {
+	for (int32 i = 0; i < file_list_length; i++) {
 		filelist[i] = file_list[i];
 	}
 
-	int min_bin_tau_1 = (int)round(min_tau_1 / bin_width);
-	int max_bin_tau_1 = (int)round(max_tau_1 / bin_width);
-	int min_bin_tau_2 = (int)round(min_tau_2 / bin_width);
-	int max_bin_tau_2 = (int)round(max_tau_2 / bin_width);
+	int64 min_bin_tau_1 = (int64)round(min_tau_1 / bin_width);
+	int64 max_bin_tau_1 = (int64)round(max_tau_1 / bin_width);
+	int64 min_bin_tau_2 = (int64)round(min_tau_2 / bin_width);
+	int64 max_bin_tau_2 = (int64)round(max_tau_2 / bin_width);
 
-	int blocks_req;
+	int32 blocks_req;
 	if (file_list_length < (num_cpu_threads_files)) {
 		blocks_req = 1;
 	}
@@ -978,14 +975,14 @@ DLLEXPORT void getG2Correlations_pulse(char **file_list, int file_list_length, d
 
 	int32 *coinc;
 	coinc = (int32*)malloc((max_bin_tau_1-min_bin_tau_1 + 1) * (max_bin_tau_2 - min_bin_tau_2 + 1) * num_cpu_threads_files * sizeof(int32));
-	for (int id = 0; id < ((max_bin_tau_1 - min_bin_tau_1 + 1) * (max_bin_tau_2 - min_bin_tau_2 + 1) * num_cpu_threads_files); id++) {
+	for (int32 id = 0; id < ((max_bin_tau_1 - min_bin_tau_1 + 1) * (max_bin_tau_2 - min_bin_tau_2 + 1) * num_cpu_threads_files); id++) {
 		coinc[id] = 0;
 	}
 
 	std::vector<int32> denom_counts(num_cpu_threads_files, 0);
 
 	//Processes files in blocks
-	for (int block_num = 0; block_num < blocks_req; block_num++) {
+	for (int32 block_num = 0; block_num < blocks_req; block_num++) {
 		//Allocate a vector to hold a block of shot_data
 		std::vector<shotData> shot_block(num_cpu_threads_files);
 
@@ -996,8 +993,8 @@ DLLEXPORT void getG2Correlations_pulse(char **file_list, int file_list_length, d
 		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files);
 
 		//Processes files
-#pragma omp parallel for num_threads(num_cpu_threads_files)
-		for (int shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
+		#pragma omp parallel for num_threads(num_cpu_threads_files)
+		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
 			if ((shot_block)[shot_file_num].file_load_completed) {
 				calculateNumer_g2_pulse(&(shot_block[shot_file_num]), &min_bin_tau_1, &max_bin_tau_1, &min_bin_tau_2, &max_bin_tau_2, coinc, shot_file_num);
 			}
@@ -1007,8 +1004,8 @@ DLLEXPORT void getG2Correlations_pulse(char **file_list, int file_list_length, d
 	}
 
 	//Collapse streamed coincidence counts down to regular numerator and denominator
-	for (int i = 0; i < num_cpu_threads_files; i++) {
-		for (int j = 0; j < (max_bin_tau_1 - min_bin_tau_1 + 1) * (max_bin_tau_2 - min_bin_tau_2 + 1); j++) {
+	for (int32 i = 0; i < num_cpu_threads_files; i++) {
+		for (int32 j = 0; j < (max_bin_tau_1 - min_bin_tau_1 + 1) * (max_bin_tau_2 - min_bin_tau_2 + 1); j++) {
 			PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + i * (max_bin_tau_1 - min_bin_tau_1 + 1) * (max_bin_tau_2 - min_bin_tau_2 + 1)]));
 		}
 	}

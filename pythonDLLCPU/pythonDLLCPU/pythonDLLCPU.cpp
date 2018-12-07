@@ -787,6 +787,89 @@ void tagsToBins(shotData *shot_data, double bin_width) {
 	}
 }
 
+void sortTags_with_counting(shotData *shot_data, int32 *tot_counts, int32 *masked_counts) {
+	int64 i;
+	int64 high_count = 0;
+	//Loop over all tags in clock_tags
+	for (i = 0; i < shot_data->clock_tags.size(); i++) {
+		//Check if clock tag is a high word
+		if (shot_data->clock_tags[i] & 1) {
+			//Up the high count
+			high_count++;
+		}
+		else {
+			//Determine whether it is the rising (start) or falling (end) slope
+			int8 slope = ((shot_data->clock_tags[i] >> 28) & 1);
+			//Put tag in appropriate clock tag vector and increment the pointer for said vector
+			shot_data->sorted_clock_tags[slope][shot_data->sorted_clock_tag_pointers[slope]] = ((shot_data->clock_tags[i] >> 1) & 0x7FFFFFF) + (high_count << 27) - ((shot_data->start_tags[1] >> 1) & 0x7FFFFFF);
+			shot_data->sorted_clock_tag_pointers[slope]++;
+		}
+	}
+	high_count = 0;
+	//Clock pointer
+	int64 clock_pointer = 0;
+	//Loop over all tags in photon_tags
+	for (i = 0; i < shot_data->photon_tags.size(); i++) {
+		//Check if photon tag is a high word
+		if (shot_data->photon_tags[i] & 1) {
+			//Up the high count
+			high_count++;
+		}
+		else {
+			(*tot_counts)++;
+			//Figure out if it fits within the mask
+			int64 time_tag = ((shot_data->photon_tags[i] >> 1) & 0x7FFFFFF) + (high_count << 27) - ((shot_data->start_tags[1] >> 1) & 0x7FFFFFF);
+			bool valid = true;
+			while (valid) {
+				//printf("%i\t%i\t%i\t", time_tag, shot_data->sorted_clock_tags[1][clock_pointer], shot_data->sorted_clock_tags[0][clock_pointer - 1]);
+				//Increment dummy pointer if channel tag is greater than current start tag
+				if ((time_tag >= shot_data->sorted_clock_tags[1][clock_pointer]) & (clock_pointer < shot_data->sorted_clock_tag_pointers[1])) {
+					//printf("up clock pointer\n");
+					clock_pointer++;
+				}
+				//Make sure clock_pointer is greater than 0, preventing an underflow error
+				else if (clock_pointer > 0) {
+					//Check if tag is lower than previous end tag i.e. startTags[j-1] < channeltags[i] < endTags[j-1]
+					if (time_tag <= shot_data->sorted_clock_tags[0][clock_pointer - 1]) {
+						//printf("add tag tot data\n");
+						//Determine the index for given tag
+						int32 channel_index;
+						//Bin tag and assign to appropriate vector
+						channel_index = shot_data->channel_map.find(((shot_data->photon_tags[i] >> 29) & 7) + 1)->second;
+						shot_data->sorted_photon_tags[channel_index][shot_data->sorted_photon_tag_pointers[channel_index]] = time_tag;
+						shot_data->sorted_photon_tag_pointers[channel_index]++;
+						(*masked_counts)++;
+						//printf("%i\t%i\t%i\n", channel_index, time_tag, shot_data->sorted_photon_tag_pointers[channel_index]);
+					}
+					//Break the valid loop
+					valid = false;
+				}
+				// If tag is smaller than the first start tag
+				else {
+					valid = false;
+				}
+			}
+		}
+	}
+}
+
+//Sorts photons and bins them for each file in a block
+void sortAndBinBlock_with_counting(std::vector<shotData> *shot_block, double bin_width, int32 num_devices, int32 block_size, int32 *tot_counts, int32 *masked_counts) {
+	std::vector<int32> tot_counts_shot(block_size * num_devices, 0);
+	std::vector<int32> masked_counts_shot(block_size * num_devices, 0);
+	#pragma omp parallel for
+	for (int32 shot_file_num = 0; shot_file_num < (block_size * num_devices); shot_file_num++) {
+		if ((*shot_block)[shot_file_num].file_load_completed) {
+			sortTags_with_counting(&(*shot_block)[shot_file_num], &(tot_counts_shot[shot_file_num]), &(masked_counts_shot[shot_file_num]));
+			tagsToBins(&(*shot_block)[shot_file_num], bin_width);
+		}
+	}
+	for (int32 shot_file_num = 0; shot_file_num < (block_size * num_devices); shot_file_num++) {
+		*tot_counts += tot_counts_shot[shot_file_num];
+		*masked_counts += masked_counts_shot[shot_file_num];
+	}
+}
+
 //Sorts photons and bins them for each file in a block
 void sortAndBinBlock(std::vector<shotData> *shot_block, double bin_width, int32 num_devices, int32 block_size) {
 #pragma omp parallel for
@@ -1010,5 +1093,101 @@ DLLEXPORT void getG2Correlations_pulse(char **file_list, int32 file_list_length,
 		}
 	}
 	free(coinc);
+
+}
+
+DLLEXPORT void getG2Correlations_with_rate_calc(char **file_list, int32 file_list_length, double max_time, double bin_width, double pulse_spacing, int64 max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int32 num_cpu_threads_files, int32 num_cpu_threads_proc) {
+
+	std::vector<char *> filelist(file_list_length);
+	//Grab filename and stick it into filelist vector
+	for (int32 i = 0; i < file_list_length; i++) {
+		filelist[i] = file_list[i];
+	}
+
+	int64 max_bin = (int64)round(max_time / bin_width);
+	int64 bin_pulse_spacing = (int64)round(pulse_spacing / bin_width);
+
+	int32 *coinc;
+	coinc = (int32*)malloc(((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc * sizeof(int32));
+	for (int32 id = 0; id < ((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
+		coinc[id] = 0;
+	}
+
+	int32 blocks_req;
+	if (file_list_length < (num_cpu_threads_files)) {
+		blocks_req = 1;
+	}
+	else if ((file_list_length % (num_cpu_threads_files)) == 0) {
+		blocks_req = file_list_length / (num_cpu_threads_files);
+	}
+	else {
+		blocks_req = file_list_length / (num_cpu_threads_files)+1;
+	}
+
+	printf("Chunking %i files into %i blocks\n", file_list_length, blocks_req);
+	printf("Max Time\tBin Width\tPulse Spacing\tMax Pulse Distance\n");
+	printf("%fus\t%fns\t%fus\t%i\n", max_time * 1e6, bin_width * 1e9, pulse_spacing * 1e6, max_pulse_distance);
+
+	std::vector<int32> denom_counts(num_cpu_threads_files, 0);
+
+	//Keep a tally of the clicks we get inside and outside the mask/clock/whatever the fuck we call it nowadays
+	int32 masked_counts = 0;
+	int32 tot_counts = 0;
+	double tot_time = 0;
+	double mask_time = 0;
+
+	//Processes files in blocks
+	for (int32 block_num = 0; block_num < blocks_req; block_num++) {
+		//Allocate a vector to hold a block of shot_data
+		std::vector<shotData> shot_block(num_cpu_threads_files);
+
+		//Populate the shot_block with data from file
+		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
+
+		//Sort tags and convert them to bins
+		sortAndBinBlock_with_counting(&shot_block, bin_width, 1, num_cpu_threads_files, &tot_counts, &masked_counts);
+		//Get the start and stop clock bin
+		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
+			if ((shot_block)[shot_file_num].file_load_completed) {
+				int64 start_tag = ((shot_block[shot_file_num].start_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].start_tags[1] >> 1) & 0x7FFFFFF);
+				int64 end_tag = ((shot_block[shot_file_num].end_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].end_tags[1] >> 1) & 0x7FFFFFF);
+				tot_time += (double)(end_tag-start_tag) * tagger_resolution;
+				mask_time += (double)(shot_block[shot_file_num].sorted_clock_tags[0][shot_block[shot_file_num].sorted_clock_tag_pointers[0] - 1] - shot_block[shot_file_num].sorted_clock_tags[1][0]) * tagger_resolution;
+			}
+		}
+
+		//Processes files
+		#pragma omp parallel for num_threads(num_cpu_threads_files)
+		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
+			if ((shot_block)[shot_file_num].file_load_completed) {
+				calculateNumer_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num, num_cpu_threads_proc);
+				if(calc_norm) {
+					calculateDenom_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[shot_file_num]), shot_file_num);
+				}
+			}
+		}
+		printf("Finished block %i of %i\n", block_num + 1, blocks_req);
+
+	}
+
+	//Collapse streamed coincidence counts down to regular numerator and denominator
+	for(int32 i = 0; i < num_cpu_threads_files; i++) {
+		for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
+			for (int32 j = 0; j < ((2 * (max_bin)+1) + (max_pulse_distance * 2)); j++) {
+				if (j < (2 * (max_bin)+1)) {
+					PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + thread * ((2 * (max_bin)+1)) + i * num_cpu_threads_proc * ((2 * (max_bin)+1))]));
+				}
+			}
+		}
+		denom[0] += denom_counts[i];
+	}
+	free(coinc);
+
+	printf("Tot counts\tMasked Counts\tTot time\tMasked time\n");
+	printf("%i\t\t%i\t\t%f\t%f\n", tot_counts, masked_counts, tot_time, mask_time);
+	double masked_rate = ((double)masked_counts) / mask_time;
+	double unmasked_rate = ((double)(tot_counts - masked_counts)) / (tot_time - mask_time);
+	printf("Masked Rate\tUnmasked Rate\n");
+	printf("%f\t%f\n", masked_rate, unmasked_rate);
 
 }

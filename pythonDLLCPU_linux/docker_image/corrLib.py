@@ -352,3 +352,14 @@ def processFiles(g2_proccessing,g3_proccessing,folder_name,file_out_name,max_tim
         g3_dict = g3ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update)
         dict = {**dict, **g3_dict}
     scipy.io.savemat(file_out_name,dict)
+
+def countTags(folder_name, channel_list):
+    file_list = os.listdir(folder_name)
+    num_files = len(file_list)
+    ctypes_file_list = file_list_to_ctypes(file_list, folder_name)
+    lib = ctypes.CDLL(working_directory + '/' + lib_name)
+    lib.getCounts.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.py_object, ctypes.c_int, ctypes.c_int]
+    start_time = time.time()
+    lib.getCounts(ctypes_file_list, num_files, channel_list, len(channel_list),16)
+    print("Finished in " + str(time.time()-start_time) + "s")
+    time.sleep(1)

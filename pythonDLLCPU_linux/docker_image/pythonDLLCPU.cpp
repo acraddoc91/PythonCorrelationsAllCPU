@@ -49,7 +49,9 @@ const size_t return_size = 3;
 const int32 file_block_size = 16;
 const double tagger_resolution = 82.3e-12;
 //const int32 offset[3] = { 0, 219, 211 };
-const int64 offset[3] = { 0, 51, 56 };
+//const int64 offset[3] = { 0, -23, 299 };
+//const int64 offset[3] = { 25, 0, 311 };
+const int64 offset[3] = {181, 157, 0};
 
 struct shotData {
 	bool file_load_completed;
@@ -1010,6 +1012,79 @@ void sortTags_with_counting(shotData *shot_data, int32 *tot_counts, int32 *maske
 	}
 }
 
+void countTags(shotData *shot_data, std::vector<int32> *tot_counts, std::vector<int32> *masked_counts, std::vector<int32> *channel_vec) {
+	int64 i;
+	int64 high_count = 0;
+	//Loop over all tags in clock_tags
+	for (i = 0; i < shot_data->clock_tags.size(); i++) {
+		//Check if clock tag is a high word
+		if (shot_data->clock_tags[i] & 1) {
+			//Up the high count
+			high_count++;
+		}
+		else {
+			//Determine whether it is the rising (start) or falling (end) slope
+			int8 slope = ((shot_data->clock_tags[i] >> 28) & 1);
+			//Put tag in appropriate clock tag vector and increment the pointer for said vector
+			shot_data->sorted_clock_tags[slope][shot_data->sorted_clock_tag_pointers[slope]] = ((shot_data->clock_tags[i] >> 1) & 0x7FFFFFF) + (high_count << 27) - ((shot_data->start_tags[1] >> 1) & 0x7FFFFFF);
+			shot_data->sorted_clock_tag_pointers[slope]++;
+		}
+	}
+	high_count = 0;
+	//Clock pointer
+	int64 clock_pointer = 0;
+	//Loop over all tags in photon_tags
+	for (i = 0; i < shot_data->photon_tags.size(); i++) {
+		//Check if photon tag is a high word
+		if (shot_data->photon_tags[i] & 1) {
+			//Up the high count
+			high_count++;
+		}
+		else {
+			//Figure out if it fits within the mask
+			int64 time_tag = ((shot_data->photon_tags[i] >> 1) & 0x7FFFFFF) + (high_count << 27) - ((shot_data->start_tags[1] >> 1) & 0x7FFFFFF);
+			//Figure out the channel index, we'll use -1 as a placeholder for if the channel index doesn't appear in the list we've given the program
+			int channel_index = -1;
+			//Loop over the channel list to see if the channel pops up in the list
+			for(int channel = 0; channel < channel_vec->size(); channel++){
+				if((*channel_vec)[channel] == (((shot_data->photon_tags[i] >> 29) & 7) + 1)){
+					channel_index = channel;
+					//Break so we're not needlessly looping
+					break;
+				}
+			}
+			//If the channel is in the channel list
+			if(channel_index >= 0){
+				//Increment the total counts related to the channel
+				(*tot_counts)[channel_index]++;
+				bool valid = true;
+				while (valid) {
+					//Increment dummy pointer if channel tag is greater than current start tag
+					if ((time_tag >= shot_data->sorted_clock_tags[1][clock_pointer]) & (clock_pointer < shot_data->sorted_clock_tag_pointers[1])) {
+						//printf("up clock pointer\n");
+						clock_pointer++;
+					}
+					//Make sure clock_pointer is greater than 0, preventing an underflow error
+					else if (clock_pointer > 0) {
+						//Check if tag is lower than previous end tag i.e. startTags[j-1] < channeltags[i] < endTags[j-1]
+						if (time_tag <= shot_data->sorted_clock_tags[0][clock_pointer - 1]) {
+							//Increment the masked counts for the channel if it lies within the mask
+							(*masked_counts)[channel_index]++;
+
+						}
+						//Break the valid loop
+						valid = false;
+					}
+					// If tag is smaller than the first start tag
+					else {
+						valid = false;
+					}
+				}
+			}
+		}
+	}
+}
+
 //Sorts photons and bins them for each file in a block
 void sortAndBinBlock_with_counting(std::vector<shotData> *shot_block, double bin_width, int32 num_devices, int32 block_size, int32 *tot_counts, int32 *masked_counts) {
 	std::vector<int32> tot_counts_shot(block_size * num_devices, 0);
@@ -1522,4 +1597,72 @@ extern "C" void EXPORT getG2Correlations_pairwise_with_rate_calc(char **file_lis
 	printf("Masked Rate\tUnmasked Rate\n");
 	printf("%f\t%f\n", masked_rate, unmasked_rate);
 
+}
+
+extern "C" void EXPORT getCounts(char **file_list, int32 file_list_length, PyObject *channel_list, int32 channel_list_length, int32 num_cpu_threads_files){
+	std::vector<char *> filelist(file_list_length);
+	//Grab filename and stick it into filelist vector
+	for (int32 i = 0; i < file_list_length; i++) {
+		filelist[i] = file_list[i];
+	}
+	int32 blocks_req;
+	if (file_list_length < (num_cpu_threads_files)) {
+		blocks_req = 1;
+	}
+	else if ((file_list_length % (num_cpu_threads_files)) == 0) {
+		blocks_req = file_list_length / (num_cpu_threads_files);
+	}
+	else {
+		blocks_req = file_list_length / (num_cpu_threads_files)+1;
+	}
+
+	std::vector<int32> channel_vec(channel_list_length,0);
+
+	//Populate channel map
+	for (int16 i = 0; i < channel_list_length; i++) {
+		channel_vec[i] = PyLong_AsLong(PyList_GetItem(channel_list, i));
+	}
+	printf("Chunking %i files into %i blocks\n", file_list_length, blocks_req);
+	std::vector<std::vector<int32>> masked_counts(num_cpu_threads_files, std::vector<int32>(channel_list_length,0));
+	std::vector<std::vector<int32>> tot_counts(num_cpu_threads_files, std::vector<int32>(channel_list_length,0));
+	double tot_time = 0;
+	double mask_time = 0;
+	//Processes files in blocks
+	for (int32 block_num = 0; block_num < blocks_req; block_num++) {
+		//Allocate a vector to hold a block of shot_data
+		std::vector<shotData> shot_block(num_cpu_threads_files);
+
+		//Populate the shot_block with data from file
+		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
+		//For each file figure out the masked and total counts
+		#pragma omp parallel for
+		for (int32 shot_file_num = 0; shot_file_num < (num_cpu_threads_files); shot_file_num++) {
+			countTags(&(shot_block[shot_file_num]), &(tot_counts[shot_file_num]), &(masked_counts[shot_file_num]), &channel_vec);
+		}
+		//Get the start and stop clock bin
+		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
+			if ((shot_block)[shot_file_num].file_load_completed) {
+				int64 start_tag = ((shot_block[shot_file_num].start_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].start_tags[1] >> 1) & 0x7FFFFFF);
+				int64 end_tag = ((shot_block[shot_file_num].end_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].end_tags[1] >> 1) & 0x7FFFFFF);
+				tot_time += (double)(end_tag-start_tag) * tagger_resolution;
+				mask_time += (double)(shot_block[shot_file_num].sorted_clock_tags[0][shot_block[shot_file_num].sorted_clock_tag_pointers[0] - 1] - shot_block[shot_file_num].sorted_clock_tags[1][0]) * tagger_resolution;
+			}
+		}
+		printf("Finished block %i of %i\n", block_num + 1, blocks_req);
+	}
+	//Collapse the counts down
+	std::vector<int32> tot_counts_collapse(channel_list_length,0);
+	std::vector<int32> masked_counts_collapse(channel_list_length,0);
+	for(int channel = 0; channel < channel_list_length; channel++){
+		for (int32 shot_file_num = 0; shot_file_num < (num_cpu_threads_files); shot_file_num++){
+			tot_counts_collapse[channel] += tot_counts[shot_file_num][channel];
+			masked_counts_collapse[channel] += masked_counts[shot_file_num][channel];
+		}
+	}
+
+	printf("Tot time\tMasked time\n");
+	printf("%f\t%f\n",tot_time, mask_time);
+	for(int i = 0; i < channel_list_length; i++){
+		printf("Channel %i: There were %i masked counts and %i unmasked counts\n", PyLong_AsLong(PyList_GetItem(channel_list, i)), masked_counts_collapse[i], tot_counts_collapse[i] - masked_counts_collapse[i]);
+	}
 }

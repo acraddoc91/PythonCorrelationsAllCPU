@@ -42,8 +42,8 @@
 	#define int64 int64_t
 #endif
 
-const int64 max_tags_length = 200000;
-const int64 max_clock_tags_length = 5000;
+const int64 max_tags_length = 2000000;
+const int64 max_clock_tags_length = 1000000;
 const int32 max_channels = 3;
 const size_t return_size = 3;
 const int32 file_block_size = 16;

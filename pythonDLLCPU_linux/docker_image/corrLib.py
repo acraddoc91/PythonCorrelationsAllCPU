@@ -45,7 +45,7 @@ def g2ToFile(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_puls
     tau = np.arange(-max_bin,max_bin+1) * int_bin_width
     scipy.io.savemat(file_out_name,{'numer':np.array(numer_list),'denom':denom_ctypes.value,'tau':tau})
 
-def g2ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm=True,update=False,disp_counts=False):
+def g2ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm=True,update=False,disp_counts=False, singles_channel_list=[3]):
     #Convert various parameters to their integer values for the DLL
     int_bin_width = round(bin_width / tagger_resolution) * tagger_resolution
     int_max_time = round(max_time / int_bin_width) * int_bin_width
@@ -94,10 +94,10 @@ def g2ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_puls
     #Setup the DLL
     lib = ctypes.CDLL(working_directory + '/' + lib_name)
     if(disp_counts):
-        lib.getG2Correlations_with_rate_calc.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int64, ctypes.py_object, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_int]
+        lib.getG2Correlations_with_rate_calc.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int64, ctypes.py_object, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_int, ctypes.py_object, ctypes.c_int]
         start_time = time.time()
         #Call the DLL
-        lib.getG2Correlations_with_rate_calc(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, ctypes.byref(denom_ctypes),calc_norm,4,4)
+        lib.getG2Correlations_with_rate_calc(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, ctypes.byref(denom_ctypes),calc_norm,4,4, singles_channel_list, len(singles_channel_list))
     else:
         lib.getG2Correlations.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int64, ctypes.py_object, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_int]
         start_time = time.time()
@@ -123,7 +123,7 @@ def g2ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_puls
         output_dict = {'numer_g2':np.array(numer_list),'denom_g2':denom_ctypes.value,'tau':tau,'file_list':dir_file_list}
     return output_dict
 
-def g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm=True,update=False,disp_counts=False,channel_1_list=[0],channel_2_list=[1]):
+def g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm=True,update=False,disp_counts=False,channel_1_list=[0],channel_2_list=[1],singles_channel_list=[3]):
     
     if len(channel_1_list) == len(channel_2_list):
         #Convert various parameters to their integer values for the DLL
@@ -174,10 +174,10 @@ def g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing
         #Setup the DLL
         lib = ctypes.CDLL(working_directory + '/' + lib_name)
         if(disp_counts):
-            lib.getG2Correlations_pairwise_with_rate_calc.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int]
+            lib.getG2Correlations_pairwise_with_rate_calc.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int, ctypes.py_object, ctypes.c_int]
             start_time = time.time()
             #Call the DLL
-            lib.getG2Correlations_pairwise_with_rate_calc(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,4,4,channel_1_list, channel_2_list, len(channel_1_list))
+            lib.getG2Correlations_pairwise_with_rate_calc(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,4,4,channel_1_list, channel_2_list, len(channel_1_list), singles_channel_list, len(singles_channel_list))
         else:
             lib.getG2Correlations_pairwise.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int]
             start_time = time.time()
@@ -339,14 +339,14 @@ def g2ToFile_pulse(folder_name, file_out_name, min_tau_1, max_tau_1, min_tau_2, 
     tau_2 = np.arange(min_tau_2_bin,max_tau_2_bin+1) * int_bin_width
     scipy.io.savemat(file_out_name,{'numer':np.array(numer_list).reshape(max_tau_2_bin-min_tau_2_bin+1,max_tau_1_bin-min_tau_1_bin+1),'tau_1':tau_1,'tau_2':tau_2})
     
-def processFiles(g2_proccessing,g3_proccessing,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts=False,pairwise=False,channel_1_list=[0],channel_2_list=[1]):
+def processFiles(g2_proccessing,g3_proccessing,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts=False,pairwise=False,channel_1_list=[0],channel_2_list=[1],singles_channel_list=[3]):
     dict = {}
     if g2_proccessing:
         if pairwise:
-            g2_dict = g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts,channel_1_list,channel_2_list)
+            g2_dict = g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts,channel_1_list,channel_2_list,singles_channel_list)
             dict = {**dict, **g2_dict}
         else:
-            g2_dict = g2ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts)
+            g2_dict = g2ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts,singles_channel_list)
             dict = {**dict, **g2_dict}
     if g3_proccessing:
         g3_dict = g3ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update)

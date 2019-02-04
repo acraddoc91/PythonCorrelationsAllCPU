@@ -94,12 +94,12 @@ def g2ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_puls
     #Setup the DLL
     lib = ctypes.CDLL(working_directory + '/' + lib_name)
     if(disp_counts):
-        lib.getG2Correlations_with_rate_calc.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int64, ctypes.py_object, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_int, ctypes.py_object, ctypes.c_int]
+        lib.getG2Correlations_with_rate_calc.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int64, ctypes.py_object, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.py_object, ctypes.c_int]
         start_time = time.time()
         #Call the DLL
         lib.getG2Correlations_with_rate_calc(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, ctypes.byref(denom_ctypes),calc_norm,4,4, singles_channel_list, len(singles_channel_list))
     else:
-        lib.getG2Correlations.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int64, ctypes.py_object, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_int]
+        lib.getG2Correlations.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int64, ctypes.py_object, ctypes.POINTER(ctypes.c_int), ctypes.c_int, ctypes.c_int, ctypes.c_int]
         start_time = time.time()
         #Call the DLL
         lib.getG2Correlations(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, ctypes.byref(denom_ctypes),calc_norm,4,4)

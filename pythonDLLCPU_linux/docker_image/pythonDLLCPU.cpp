@@ -193,95 +193,102 @@ void calculateNumer_g2(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing
 	//Loop over all the channels to be channel 1
 	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
 
-		//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
-		int64 low_index;
-		int64 high_index;
-		//Figure out which indices in the first thread we can ignore
-		#pragma omp parallel for
-		for (int32 i = 0; i < 2; i++) {
-			if (i == 0) {
-				low_index = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], *max_bin + *max_pulse_distance * *pulse_spacing + start_clock);
-			}
-			else {
-				high_index = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing));
-			}
-		}
-
-		//Split the remaining indices between the work threads we have
-		int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
-		for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
-
-			//Vector to hold the relevant indices on channel 2, for each tag on channel 1, that falls with the max/min tau
-			std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
-			#pragma omp parallel for num_threads(num_cpu_threads_proc)
-			for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
-				
-				//Find out form this thread what the first and last indices to work on are
-				int64 first_index = thread*indices_per_thread + low_index;
-				int64 last_index;
-				if (thread == num_cpu_threads_proc - 1) {
-					last_index = high_index;
+		//Make sure we've actually got some tags in channel 1
+		if(shot_data->sorted_photon_tag_pointers[channel_1] > 0){
+			//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
+			int64 low_index;
+			int64 high_index;
+			//Figure out which indices in the first thread we can ignore
+			#pragma omp parallel for
+			for (int32 i = 0; i < 2; i++) {
+				if (i == 0) {
+					low_index = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], *max_bin + *max_pulse_distance * *pulse_spacing + start_clock);
 				}
 				else {
-					last_index = first_index + indices_per_thread-1;
+					high_index = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing));
 				}
+			}
 
-				//Do a binary search to find the first and last relevant tag on channel 2 for the first tag on channel 1 that the thread is working on
-				int64 lower_pointer = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);;
-				int64 upper_pointer = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
-
-				//Save the relevant tags on channel 2
-				channel_2_indices[first_index-low_index][0] = lower_pointer;
-				channel_2_indices[first_index-low_index][1] = upper_pointer;
-
-				//Loop over all the channel 1 indices this thread needs to work on
-				for (int64 i = first_index + 1; i <= last_index; i++) {
-
-					//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
-					bool going = true;
-					int64 j = lower_pointer;
-					while (going) {
-						if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-							j++;
-							lower_pointer = j;
+			//Split the remaining indices between the work threads we have
+			int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
+			for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
+				
+				//Check there are tags in channel 2
+				if(shot_data->sorted_photon_tag_pointers[channel_2] > 0){
+					//Vector to hold the relevant indices on channel 2, for each tag on channel 1, that falls with the max/min tau
+					std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
+					#pragma omp parallel for num_threads(num_cpu_threads_proc)
+					for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
+						
+						//Find out form this thread what the first and last indices to work on are
+						int64 first_index = thread*indices_per_thread + low_index;
+						int64 last_index;
+						if (thread == num_cpu_threads_proc - 1) {
+							last_index = high_index;
 						}
-						else if (shot_data->sorted_photon_bins[channel_2][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-							going = false;
-							lower_pointer = j;
+						else {
+							last_index = first_index + indices_per_thread-1;
 						}
-						if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-							going = false;
-							lower_pointer = j;
+
+						//Do a binary search to find the first and last relevant tag on channel 2 for the first tag on channel 1 that the thread is working on
+						int64 lower_pointer = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);;
+						int64 upper_pointer = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
+
+						//Save the relevant tags on channel 2
+						channel_2_indices[first_index-low_index][0] = lower_pointer;
+						channel_2_indices[first_index-low_index][1] = upper_pointer;
+
+						//Loop over all the channel 1 indices this thread needs to work on
+						for (int64 i = first_index + 1; i <= last_index; i++) {
+
+							//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
+							bool going = true;
+							int64 j = lower_pointer;
+							while (going) {
+								if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+									j++;
+									lower_pointer = j;
+								}
+								else if (shot_data->sorted_photon_bins[channel_2][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+									going = false;
+									lower_pointer = j;
+								}
+								if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
+									going = false;
+									lower_pointer = j;
+								}
+							}
+							//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
+							j = upper_pointer;
+							going = true;
+							while (going) {
+								if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+									j++;
+									upper_pointer = j;
+								}
+								else if (shot_data->sorted_photon_bins[channel_2][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+									going = false;
+									upper_pointer = j - 1;
+								}
+								if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
+									going = false;
+									upper_pointer = shot_data->sorted_photon_tag_pointers[channel_2] - 1;
+								}
+							}
+							//Save the relevant tags to the vector for later
+							channel_2_indices[i - low_index][0] = lower_pointer;
+							channel_2_indices[i - low_index][1] = upper_pointer;
+						}
+						//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
+						for (int64 i = first_index; i <= last_index; i++) {
+							for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
+								int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
+								coinc[id_x + thread * ((*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc * ((*max_bin * 2 + 1))]++;
+							}
 						}
 					}
-					//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
-					j = upper_pointer;
-					going = true;
-					while (going) {
-						if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-							j++;
-							upper_pointer = j;
-						}
-						else if (shot_data->sorted_photon_bins[channel_2][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-							going = false;
-							upper_pointer = j - 1;
-						}
-						if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-							going = false;
-							upper_pointer = shot_data->sorted_photon_tag_pointers[channel_2] - 1;
-						}
-					}
-					//Save the relevant tags to the vector for later
-					channel_2_indices[i - low_index][0] = lower_pointer;
-					channel_2_indices[i - low_index][1] = upper_pointer;
 				}
-				//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
-				for (int64 i = first_index; i <= last_index; i++) {
-					for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
-						int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
-						coinc[id_x + thread * ((*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc * ((*max_bin * 2 + 1))]++;
-					}
-				}
+
 			}
 		}
 	}
@@ -294,141 +301,148 @@ void calculateNumer_g3(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing
 	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
 	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
-
-		//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
-		int64 low_index;
-		int64 high_index;
-		//Figure out which indices in the first thread we can ignore
-		#pragma omp parallel for
-		for (int8 i = 0; i < 2; i++) {
-			if (i == 0) {
-				low_index = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], *max_bin + *max_pulse_distance * *pulse_spacing + start_clock);
+		//Make sure we've actually got some tags in channel 1
+		if(shot_data->sorted_photon_tag_pointers[channel_1] > 0){
+			//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
+			int64 low_index;
+			int64 high_index;
+			//Figure out which indices in the first thread we can ignore
+			#pragma omp parallel for
+			for (int8 i = 0; i < 2; i++) {
+				if (i == 0) {
+					low_index = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], *max_bin + *max_pulse_distance * *pulse_spacing + start_clock);
+				}
+				else {
+					high_index = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing));
+				}
 			}
-			else {
-				high_index = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing));
-			}
-		}
 
-		//Split the remaining indices between the work threads we have
-		int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
+			//Split the remaining indices between the work threads we have
+			int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
 
-		for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
-			for (int32 channel_3 = channel_2 + 1; channel_3 < shot_data->channel_list.size(); channel_3++) {
+			for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
+				//Make sure we've actually got some tags in channel 2
+				if(shot_data->sorted_photon_tag_pointers[channel_2] > 0){
+					for (int32 channel_3 = channel_2 + 1; channel_3 < shot_data->channel_list.size(); channel_3++) {
+						//Make sure we've actually got some tags in channel 3
+						if(shot_data->sorted_photon_tag_pointers[channel_3] > 0){
+							//Vector to hold the relevant indices on channel 2 and 3, for each tag on channel 1, that falls with the max/min tau
+							std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
+							std::vector<std::vector<int64>> channel_3_indices(high_index - low_index + 1, std::vector<int64>(2));
+							#pragma omp parallel for num_threads(num_cpu_threads_proc)
+							for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
+								//Find out form this thread what the first and last indices to work on are
+								int64 first_index = thread*indices_per_thread + low_index;
+								int64 last_index;
+								if (thread == num_cpu_threads_proc - 1) {
+									last_index = high_index;
+								}
+								else {
+									last_index = first_index + indices_per_thread - 1;
+								}
 
-				//Vector to hold the relevant indices on channel 2 and 3, for each tag on channel 1, that falls with the max/min tau
-				std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
-				std::vector<std::vector<int64>> channel_3_indices(high_index - low_index + 1, std::vector<int64>(2));
-				#pragma omp parallel for num_threads(num_cpu_threads_proc)
-				for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
-					//Find out form this thread what the first and last indices to work on are
-					int64 first_index = thread*indices_per_thread + low_index;
-					int64 last_index;
-					if (thread == num_cpu_threads_proc - 1) {
-						last_index = high_index;
-					}
-					else {
-						last_index = first_index + indices_per_thread - 1;
-					}
+								//Do a binary search to find the first and last relevant tag on channel 2 and 3 for the first tag on channel 1 that the thread is working on
+								int64 lower_pointer_2 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
+								int64 upper_pointer_2 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
+								int64 lower_pointer_3 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
+								int64 upper_pointer_3 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
 
-					//Do a binary search to find the first and last relevant tag on channel 2 and 3 for the first tag on channel 1 that the thread is working on
-					int64 lower_pointer_2 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
-					int64 upper_pointer_2 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
-					int64 lower_pointer_3 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
-					int64 upper_pointer_3 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
+								//Save the relevant tags on channel 2 and 3
+								channel_2_indices[first_index - low_index][0] = lower_pointer_2;
+								channel_2_indices[first_index - low_index][1] = upper_pointer_2;
+								channel_3_indices[first_index - low_index][0] = lower_pointer_3;
+								channel_3_indices[first_index - low_index][1] = upper_pointer_3;
 
-					//Save the relevant tags on channel 2 and 3
-					channel_2_indices[first_index - low_index][0] = lower_pointer_2;
-					channel_2_indices[first_index - low_index][1] = upper_pointer_2;
-					channel_3_indices[first_index - low_index][0] = lower_pointer_3;
-					channel_3_indices[first_index - low_index][1] = upper_pointer_3;
+								for (int64 i = first_index; i <= last_index; i++) {
+									//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
+									bool going = true;
+									int64 j = lower_pointer_2;
+									while (going) {
+										if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+											j++;
+											lower_pointer_2 = j;
+										}
+										else if (shot_data->sorted_photon_bins[channel_2][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+											going = false;
+											lower_pointer_2 = j;
+										}
+										if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
+											going = false;
+											lower_pointer_2 = j;
+										}
+									}
+									//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
+									j = upper_pointer_2;
+									going = true;
+									while (going) {
+										if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+											j++;
+											upper_pointer_2 = j;
+										}
+										else if (shot_data->sorted_photon_bins[channel_2][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+											going = false;
+											upper_pointer_2 = j - 1;
+										}
+										if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
+											going = false;
+											upper_pointer_2 = shot_data->sorted_photon_tag_pointers[channel_2] - 1;
+										}
+									}
+									//Save the relevant tags to the vector for later
+									channel_2_indices[i - low_index][0] = lower_pointer_2;
+									channel_2_indices[i - low_index][1] = upper_pointer_2;
 
-					for (int64 i = first_index; i <= last_index; i++) {
-						//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
-						bool going = true;
-						int64 j = lower_pointer_2;
-						while (going) {
-							if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-								j++;
-								lower_pointer_2 = j;
-							}
-							else if (shot_data->sorted_photon_bins[channel_2][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-								going = false;
-								lower_pointer_2 = j;
-							}
-							if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-								going = false;
-								lower_pointer_2 = j;
-							}
-						}
-						//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
-						j = upper_pointer_2;
-						going = true;
-						while (going) {
-							if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-								j++;
-								upper_pointer_2 = j;
-							}
-							else if (shot_data->sorted_photon_bins[channel_2][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-								going = false;
-								upper_pointer_2 = j - 1;
-							}
-							if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-								going = false;
-								upper_pointer_2 = shot_data->sorted_photon_tag_pointers[channel_2] - 1;
-							}
-						}
-						//Save the relevant tags to the vector for later
-						channel_2_indices[i - low_index][0] = lower_pointer_2;
-						channel_2_indices[i - low_index][1] = upper_pointer_2;
+									//Find the first tag on channel 3 that is within the max/min tau of the current channel 1 tag
+									going = true;
+									j = lower_pointer_3;
+									while (going) {
+										if (shot_data->sorted_photon_bins[channel_3][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+											j++;
+											lower_pointer_3 = j;
+										}
+										else if (shot_data->sorted_photon_bins[channel_3][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+											going = false;
+											lower_pointer_3 = j;
+										}
+										if (j > shot_data->sorted_photon_tag_pointers[channel_3]) {
+											going = false;
+											lower_pointer_3 = j;
+										}
+									}
+									//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
+									j = upper_pointer_3;
+									going = true;
+									while (going) {
+										if (shot_data->sorted_photon_bins[channel_3][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+											j++;
+											upper_pointer_3 = j;
+										}
+										else if (shot_data->sorted_photon_bins[channel_3][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+											going = false;
+											upper_pointer_3 = j - 1;
+										}
+										if (j > shot_data->sorted_photon_tag_pointers[channel_3]) {
+											going = false;
+											upper_pointer_3 = shot_data->sorted_photon_tag_pointers[channel_3] - 1;
+										}
+									}
+									//Save the relevant tags to the vector for later
+									channel_3_indices[i - low_index][0] = lower_pointer_3;
+									channel_3_indices[i - low_index][1] = upper_pointer_3;
+								}
+								//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
+								for (int64 i = first_index; i <= last_index; i++) {
+									for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
+										for (int64 k = channel_3_indices[i - low_index][0]; k <= channel_3_indices[i - low_index][1]; k++) {
 
-						//Find the first tag on channel 3 that is within the max/min tau of the current channel 1 tag
-						going = true;
-						j = lower_pointer_3;
-						while (going) {
-							if (shot_data->sorted_photon_bins[channel_3][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-								j++;
-								lower_pointer_3 = j;
-							}
-							else if (shot_data->sorted_photon_bins[channel_3][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-								going = false;
-								lower_pointer_3 = j;
-							}
-							if (j > shot_data->sorted_photon_tag_pointers[channel_3]) {
-								going = false;
-								lower_pointer_3 = j;
-							}
-						}
-						//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
-						j = upper_pointer_3;
-						going = true;
-						while (going) {
-							if (shot_data->sorted_photon_bins[channel_3][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-								j++;
-								upper_pointer_3 = j;
-							}
-							else if (shot_data->sorted_photon_bins[channel_3][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-								going = false;
-								upper_pointer_3 = j - 1;
-							}
-							if (j > shot_data->sorted_photon_tag_pointers[channel_3]) {
-								going = false;
-								upper_pointer_3 = shot_data->sorted_photon_tag_pointers[channel_3] - 1;
-							}
-						}
-						//Save the relevant tags to the vector for later
-						channel_3_indices[i - low_index][0] = lower_pointer_3;
-						channel_3_indices[i - low_index][1] = upper_pointer_3;
-					}
-					//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
-					for (int64 i = first_index; i <= last_index; i++) {
-						for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
-							for (int64 k = channel_3_indices[i - low_index][0]; k <= channel_3_indices[i - low_index][1]; k++) {
+											int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
+											int64 id_y = shot_data->sorted_photon_bins[channel_3][k] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
+											int64 tot_id = id_y * (2 * (*max_bin) + 1) + id_x;
+											coinc[tot_id + thread * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc  * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1))]++;
 
-								int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
-								int64 id_y = shot_data->sorted_photon_bins[channel_3][k] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
-								int64 tot_id = id_y * (2 * (*max_bin) + 1) + id_x;
-								coinc[tot_id + thread * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc  * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1))]++;
-
+										}
+									}
+								}
 							}
 						}
 					}
@@ -596,31 +610,37 @@ void calculateDenom_g2(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing
 	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
 	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
-		for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
-			std::vector<int32> denom_counts(*max_pulse_distance * 2 + 1, 0);
-			#pragma omp parallel for
-			for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
-				if (pulse_dist != 0) {
-					int64 tau = *pulse_spacing * pulse_dist;
-					int64 i = 0;
-					int64 j = 0;
-					while ((i < shot_data->sorted_photon_tag_pointers[channel_1]) && (j < shot_data->sorted_photon_tag_pointers[channel_2])) {
-						//Check if we're outside the window of interest
-						int32 out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
-						//chan_1 > chan_2
-						int32 c1gc2 = shot_data->sorted_photon_bins[channel_1][i] >(shot_data->sorted_photon_bins[channel_2][j] - tau);
-						//Check if we have a common element increment
-						int32 c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau);
-						//Increment running total if channel 1 equals channel 2
-						denom_counts[pulse_dist + *max_pulse_distance] += !out_window && c1ec2;
-						//Increment channel 1 if it is greater than channel 2, equal to channel 2 or ouside of the window
-						i += (!c1gc2 || out_window);
-						j += (c1gc2 || c1ec2);
+		//Make sure we've actually got some tags in channel 1
+		if(shot_data->sorted_photon_tag_pointers[channel_1] > 0){
+			for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
+				//Make sure we've actually got some tags in channel 2
+				if(shot_data->sorted_photon_tag_pointers[channel_2] > 0){
+					std::vector<int32> denom_counts(*max_pulse_distance * 2 + 1, 0);
+					#pragma omp parallel for
+					for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
+						if (pulse_dist != 0) {
+							int64 tau = *pulse_spacing * pulse_dist;
+							int64 i = 0;
+							int64 j = 0;
+							while ((i < shot_data->sorted_photon_tag_pointers[channel_1]) && (j < shot_data->sorted_photon_tag_pointers[channel_2])) {
+								//Check if we're outside the window of interest
+								int32 out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
+								//chan_1 > chan_2
+								int32 c1gc2 = shot_data->sorted_photon_bins[channel_1][i] >(shot_data->sorted_photon_bins[channel_2][j] - tau);
+								//Check if we have a common element increment
+								int32 c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau);
+								//Increment running total if channel 1 equals channel 2
+								denom_counts[pulse_dist + *max_pulse_distance] += !out_window && c1ec2;
+								//Increment channel 1 if it is greater than channel 2, equal to channel 2 or ouside of the window
+								i += (!c1gc2 || out_window);
+								j += (c1gc2 || c1ec2);
+							}
+						}
+					}
+					for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
+						denom[0] += denom_counts[pulse_dist + *max_pulse_distance];
 					}
 				}
-			}
-			for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
-				denom[0] += denom_counts[pulse_dist + *max_pulse_distance];
 			}
 		}
 	}
@@ -628,96 +648,100 @@ void calculateDenom_g2(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing
 
 void calculateNumer_g2_for_channel_pair(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *coinc, int32 shot_file_num, int32 num_cpu_threads_proc, int32 channel_1, int32 channel_2) {
 	
-	//Get the start and stop clock bin
-	int64 start_clock = shot_data->sorted_clock_bins[1][0];
-	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
+	//Make sure we've actually got some tags in channel 1
+	if((shot_data->sorted_photon_tag_pointers[channel_1] > 0) && (shot_data->sorted_photon_tag_pointers[channel_2] > 0)){
 
-	//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
-	int64 low_index;
-	int64 high_index;
-	//Figure out which indices in the first thread we can ignore
-	#pragma omp parallel for
-	for (int32 i = 0; i < 2; i++) {
-		if (i == 0) {
-			low_index = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], *max_bin + *max_pulse_distance * *pulse_spacing + start_clock);
-		}
-		else {
-			high_index = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing));
-		}
-	}
+		//Get the start and stop clock bin
+		int64 start_clock = shot_data->sorted_clock_bins[1][0];
+		int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
-	//Split the remaining indices between the work threads we have
-	int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
-
-	//Vector to hold the relevant indices on channel 2, for each tag on channel 1, that falls with the max/min tau
-	std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
-	#pragma omp parallel for num_threads(num_cpu_threads_proc)
-	for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
-		
-		//Find out form this thread what the first and last indices to work on are
-		int64 first_index = thread*indices_per_thread + low_index;
-		int64 last_index;
-		if (thread == num_cpu_threads_proc - 1) {
-			last_index = high_index;
-		}
-		else {
-			last_index = first_index + indices_per_thread-1;
-		}
-
-		//Do a binary search to find the first and last relevant tag on channel 2 for the first tag on channel 1 that the thread is working on
-		int64 lower_pointer = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);;
-		int64 upper_pointer = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
-
-		//Save the relevant tags on channel 2
-		channel_2_indices[first_index-low_index][0] = lower_pointer;
-		channel_2_indices[first_index-low_index][1] = upper_pointer;
-
-		//Loop over all the channel 1 indices this thread needs to work on
-		for (int64 i = first_index + 1; i <= last_index; i++) {
-
-			//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
-			bool going = true;
-			int64 j = lower_pointer;
-			while (going) {
-				if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-					j++;
-					lower_pointer = j;
-				}
-				else if (shot_data->sorted_photon_bins[channel_2][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-					going = false;
-					lower_pointer = j;
-				}
-				if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-					going = false;
-					lower_pointer = j;
-				}
+		//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
+		int64 low_index;
+		int64 high_index;
+		//Figure out which indices in the first thread we can ignore
+		#pragma omp parallel for
+		for (int32 i = 0; i < 2; i++) {
+			if (i == 0) {
+				low_index = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], *max_bin + *max_pulse_distance * *pulse_spacing + start_clock);
 			}
-			//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
-			j = upper_pointer;
-			going = true;
-			while (going) {
-				if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-					j++;
-					upper_pointer = j;
-				}
-				else if (shot_data->sorted_photon_bins[channel_2][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-					going = false;
-					upper_pointer = j - 1;
-				}
-				if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-					going = false;
-					upper_pointer = shot_data->sorted_photon_tag_pointers[channel_2] - 1;
-				}
+			else {
+				high_index = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing));
 			}
-			//Save the relevant tags to the vector for later
-			channel_2_indices[i - low_index][0] = lower_pointer;
-			channel_2_indices[i - low_index][1] = upper_pointer;
 		}
-		//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
-		for (int64 i = first_index; i <= last_index; i++) {
-			for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
-				int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
-				coinc[id_x + thread * ((*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc * ((*max_bin * 2 + 1))]++;
+
+		//Split the remaining indices between the work threads we have
+		int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
+
+		//Vector to hold the relevant indices on channel 2, for each tag on channel 1, that falls with the max/min tau
+		std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
+		#pragma omp parallel for num_threads(num_cpu_threads_proc)
+		for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
+			
+			//Find out form this thread what the first and last indices to work on are
+			int64 first_index = thread*indices_per_thread + low_index;
+			int64 last_index;
+			if (thread == num_cpu_threads_proc - 1) {
+				last_index = high_index;
+			}
+			else {
+				last_index = first_index + indices_per_thread-1;
+			}
+
+			//Do a binary search to find the first and last relevant tag on channel 2 for the first tag on channel 1 that the thread is working on
+			int64 lower_pointer = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);;
+			int64 upper_pointer = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
+
+			//Save the relevant tags on channel 2
+			channel_2_indices[first_index-low_index][0] = lower_pointer;
+			channel_2_indices[first_index-low_index][1] = upper_pointer;
+
+			//Loop over all the channel 1 indices this thread needs to work on
+			for (int64 i = first_index + 1; i <= last_index; i++) {
+
+				//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
+				bool going = true;
+				int64 j = lower_pointer;
+				while (going) {
+					if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+						j++;
+						lower_pointer = j;
+					}
+					else if (shot_data->sorted_photon_bins[channel_2][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+						going = false;
+						lower_pointer = j;
+					}
+					if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
+						going = false;
+						lower_pointer = j;
+					}
+				}
+				//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
+				j = upper_pointer;
+				going = true;
+				while (going) {
+					if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+						j++;
+						upper_pointer = j;
+					}
+					else if (shot_data->sorted_photon_bins[channel_2][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+						going = false;
+						upper_pointer = j - 1;
+					}
+					if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
+						going = false;
+						upper_pointer = shot_data->sorted_photon_tag_pointers[channel_2] - 1;
+					}
+				}
+				//Save the relevant tags to the vector for later
+				channel_2_indices[i - low_index][0] = lower_pointer;
+				channel_2_indices[i - low_index][1] = upper_pointer;
+			}
+			//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
+			for (int64 i = first_index; i <= last_index; i++) {
+				for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
+					int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
+					coinc[id_x + thread * ((*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc * ((*max_bin * 2 + 1))]++;
+				}
 			}
 		}
 	}
@@ -725,33 +749,36 @@ void calculateNumer_g2_for_channel_pair(shotData *shot_data, int64 *max_bin, int
 
 void calculateDenom_g2_for_channel_pair(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *denom, int32 shot_file_num, int32 channel_1, int32 channel_2) {
 
-	int64 start_clock = shot_data->sorted_clock_bins[1][0];
-	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
+	if((shot_data->sorted_photon_tag_pointers[channel_1] > 0) && (shot_data->sorted_photon_tag_pointers[channel_2] > 0)){
 
-	std::vector<int32> denom_counts(*max_pulse_distance * 2 + 1, 0);
-	#pragma omp parallel for
-	for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
-		if (pulse_dist != 0) {
-			int64 tau = *pulse_spacing * pulse_dist;
-			int64 i = 0;
-			int64 j = 0;
-			while ((i < shot_data->sorted_photon_tag_pointers[channel_1]) && (j < shot_data->sorted_photon_tag_pointers[channel_2])) {
-				//Check if we're outside the window of interest
-				int32 out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
-				//chan_1 > chan_2
-				int32 c1gc2 = shot_data->sorted_photon_bins[channel_1][i] >(shot_data->sorted_photon_bins[channel_2][j] - tau);
-				//Check if we have a common element increment
-				int32 c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau);
-				//Increment running total if channel 1 equals channel 2
-				denom_counts[pulse_dist + *max_pulse_distance] += !out_window && c1ec2;
-				//Increment channel 1 if it is greater than channel 2, equal to channel 2 or ouside of the window
-				i += (!c1gc2 || out_window);
-				j += (c1gc2 || c1ec2);
+		int64 start_clock = shot_data->sorted_clock_bins[1][0];
+		int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
+
+		std::vector<int32> denom_counts(*max_pulse_distance * 2 + 1, 0);
+		#pragma omp parallel for
+		for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
+			if (pulse_dist != 0) {
+				int64 tau = *pulse_spacing * pulse_dist;
+				int64 i = 0;
+				int64 j = 0;
+				while ((i < shot_data->sorted_photon_tag_pointers[channel_1]) && (j < shot_data->sorted_photon_tag_pointers[channel_2])) {
+					//Check if we're outside the window of interest
+					int32 out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
+					//chan_1 > chan_2
+					int32 c1gc2 = shot_data->sorted_photon_bins[channel_1][i] >(shot_data->sorted_photon_bins[channel_2][j] - tau);
+					//Check if we have a common element increment
+					int32 c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau);
+					//Increment running total if channel 1 equals channel 2
+					denom_counts[pulse_dist + *max_pulse_distance] += !out_window && c1ec2;
+					//Increment channel 1 if it is greater than channel 2, equal to channel 2 or ouside of the window
+					i += (!c1gc2 || out_window);
+					j += (c1gc2 || c1ec2);
+				}
 			}
 		}
-	}
-	for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
-		denom[0] += denom_counts[pulse_dist + *max_pulse_distance];
+		for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
+			denom[0] += denom_counts[pulse_dist + *max_pulse_distance];
+		}
 	}
 }
 
@@ -946,72 +973,6 @@ void sortAndBinBlock(std::vector<shotData> *shot_block, double bin_width, int32 
 	}
 }
 
-void sortTags_with_counting(shotData *shot_data, int32 *tot_counts, int32 *masked_counts) {
-	int64 i;
-	int64 high_count = 0;
-	//Loop over all tags in clock_tags
-	for (i = 0; i < shot_data->clock_tags.size(); i++) {
-		//Check if clock tag is a high word
-		if (shot_data->clock_tags[i] & 1) {
-			//Up the high count
-			high_count++;
-		}
-		else {
-			//Determine whether it is the rising (start) or falling (end) slope
-			int8 slope = ((shot_data->clock_tags[i] >> 28) & 1);
-			//Put tag in appropriate clock tag vector and increment the pointer for said vector
-			shot_data->sorted_clock_tags[slope][shot_data->sorted_clock_tag_pointers[slope]] = ((shot_data->clock_tags[i] >> 1) & 0x7FFFFFF) + (high_count << 27) - ((shot_data->start_tags[1] >> 1) & 0x7FFFFFF);
-			shot_data->sorted_clock_tag_pointers[slope]++;
-		}
-	}
-	high_count = 0;
-	//Clock pointer
-	int64 clock_pointer = 0;
-	//Loop over all tags in photon_tags
-	for (i = 0; i < shot_data->photon_tags.size(); i++) {
-		//Check if photon tag is a high word
-		if (shot_data->photon_tags[i] & 1) {
-			//Up the high count
-			high_count++;
-		}
-		else {
-			(*tot_counts)++;
-			//Figure out if it fits within the mask
-			int64 time_tag = ((shot_data->photon_tags[i] >> 1) & 0x7FFFFFF) + (high_count << 27) - ((shot_data->start_tags[1] >> 1) & 0x7FFFFFF);
-			bool valid = true;
-			while (valid) {
-				//printf("%i\t%i\t%i\t", time_tag, shot_data->sorted_clock_tags[1][clock_pointer], shot_data->sorted_clock_tags[0][clock_pointer - 1]);
-				//Increment dummy pointer if channel tag is greater than current start tag
-				if ((time_tag >= shot_data->sorted_clock_tags[1][clock_pointer]) & (clock_pointer < shot_data->sorted_clock_tag_pointers[1])) {
-					//printf("up clock pointer\n");
-					clock_pointer++;
-				}
-				//Make sure clock_pointer is greater than 0, preventing an underflow error
-				else if (clock_pointer > 0) {
-					//Check if tag is lower than previous end tag i.e. startTags[j-1] < channeltags[i] < endTags[j-1]
-					if (time_tag <= shot_data->sorted_clock_tags[0][clock_pointer - 1]) {
-						//printf("add tag tot data\n");
-						//Determine the index for given tag
-						int32 channel_index;
-						//Bin tag and assign to appropriate vector
-						channel_index = shot_data->channel_map.find(((shot_data->photon_tags[i] >> 29) & 7) + 1)->second;
-						shot_data->sorted_photon_tags[channel_index][shot_data->sorted_photon_tag_pointers[channel_index]] = time_tag;
-						shot_data->sorted_photon_tag_pointers[channel_index]++;
-						(*masked_counts)++;
-						//printf("%i\t%i\t%i\n", channel_index, time_tag, shot_data->sorted_photon_tag_pointers[channel_index]);
-					}
-					//Break the valid loop
-					valid = false;
-				}
-				// If tag is smaller than the first start tag
-				else {
-					valid = false;
-				}
-			}
-		}
-	}
-}
-
 void countTags(shotData *shot_data, std::vector<int32> *tot_counts, std::vector<int32> *masked_counts, std::vector<int32> *mask_block_counts, std::vector<int32> *channel_vec) {
 	int64 high_count = 0;
 	//Clock pointer
@@ -1069,23 +1030,6 @@ void countTags(shotData *shot_data, std::vector<int32> *tot_counts, std::vector<
 				}
 			}
 		}
-	}
-}
-
-//Sorts photons and bins them for each file in a block
-void sortAndBinBlock_with_counting(std::vector<shotData> *shot_block, double bin_width, int32 num_devices, int32 block_size, int32 *tot_counts, int32 *masked_counts) {
-	std::vector<int32> tot_counts_shot(block_size * num_devices, 0);
-	std::vector<int32> masked_counts_shot(block_size * num_devices, 0);
-	#pragma omp parallel for
-	for (int32 shot_file_num = 0; shot_file_num < (block_size * num_devices); shot_file_num++) {
-		if ((*shot_block)[shot_file_num].file_load_completed) {
-			sortTags_with_counting(&(*shot_block)[shot_file_num], &(tot_counts_shot[shot_file_num]), &(masked_counts_shot[shot_file_num]));
-			tagsToBins(&(*shot_block)[shot_file_num], bin_width);
-		}
-	}
-	for (int32 shot_file_num = 0; shot_file_num < (block_size * num_devices); shot_file_num++) {
-		*tot_counts += tot_counts_shot[shot_file_num];
-		*masked_counts += masked_counts_shot[shot_file_num];
 	}
 }
 
@@ -1207,7 +1151,6 @@ extern "C" void EXPORT getG2Correlations(char **file_list, int32 file_list_lengt
 
 		//Sort tags and convert them to bins
 		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files);
-
 
 		//Processes files
 		#pragma omp parallel for num_threads(num_cpu_threads_files)

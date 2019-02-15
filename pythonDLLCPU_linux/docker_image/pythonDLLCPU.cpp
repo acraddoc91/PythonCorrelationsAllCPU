@@ -260,6 +260,10 @@ void calculateNumer_g2(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing
 							}
 							//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
 							j = upper_pointer;
+							//Ensure j can't be negative
+							if(j < 0){
+								j = 0;
+							}
 							going = true;
 							while (going) {
 								if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
@@ -373,6 +377,10 @@ void calculateNumer_g3(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing
 									}
 									//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
 									j = upper_pointer_2;
+									//Ensure j can't be negative
+									if(j < 0){
+										j = 0;
+									}
 									going = true;
 									while (going) {
 										if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
@@ -411,6 +419,10 @@ void calculateNumer_g3(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing
 									}
 									//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
 									j = upper_pointer_3;
+									//Ensure j can't be negative
+									if(j < 0){
+										j = 0;
+									}
 									going = true;
 									while (going) {
 										if (shot_data->sorted_photon_bins[channel_3][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
@@ -530,6 +542,10 @@ void calculateNumer_g2_pulse(shotData *shot_data, int64 *min_bin_1, int64 *max_b
 				}
 				//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
 				j = upper_pointer_1;
+				//Ensure j can't be negative
+				if(j < 0){
+					j = 0;
+				}
 				going = true;
 				while (going) {
 					if (shot_data->sorted_photon_bins[channel_1][j] <= shot_data->sorted_clock_bins[1][i] + *max_bin_1) {
@@ -568,6 +584,10 @@ void calculateNumer_g2_pulse(shotData *shot_data, int64 *min_bin_1, int64 *max_b
 				}
 				//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
 				j = upper_pointer_2;
+				//Ensure j can't be negative
+				if(j < 0){
+					j = 0;
+				}
 				going = true;
 				while (going) {
 					if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_clock_bins[1][i] + *max_bin_2) {
@@ -717,6 +737,10 @@ void calculateNumer_g2_for_channel_pair(shotData *shot_data, int64 *max_bin, int
 				}
 				//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
 				j = upper_pointer;
+				//Ensure j can't be negative
+				if(j < 0){
+					j = 0;
+				}
 				going = true;
 				while (going) {
 					if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {

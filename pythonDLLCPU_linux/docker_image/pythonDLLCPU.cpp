@@ -997,6 +997,25 @@ void sortAndBinBlock(std::vector<shotData> *shot_block, double bin_width, int32 
 	}
 }
 
+void getChannelList(char* filename, std::vector<int16>* channel_list){
+	//Open up file
+	H5::H5File file(filename, H5F_ACC_RDONLY);
+	//Open up "Inform" group
+	H5::Group inform_group(file.openGroup("Inform"));
+	//Grab channel list
+	H5::DataSet chan_dset(inform_group.openDataSet("ChannelList"));
+	H5::DataSpace chan_dspace = chan_dset.getSpace();
+	hsize_t chan_length[1];
+	chan_dspace.getSimpleExtentDims(chan_length, NULL);
+	channel_list->resize(chan_length[0]);
+	chan_dset.read(&((*channel_list)[0u]), H5::PredType::NATIVE_UINT16, chan_dspace);
+	chan_dspace.close();
+	chan_dset.close();
+	//Close Inform group
+	inform_group.close();
+	file.close();
+}
+
 void countTags(shotData *shot_data, std::vector<int32> *tot_counts, std::vector<int32> *masked_counts, std::vector<int32> *mask_block_counts, std::vector<int32> *channel_vec) {
 	int64 high_count = 0;
 	//Clock pointer
@@ -1709,4 +1728,29 @@ extern "C" void EXPORT getCounts(char **file_list, int32 file_list_length, PyObj
 
 	printf("\n\n");
 
+}
+
+extern "C" void EXPORT testGetChannels(char **file_list, int32 file_list_length){
+	std::vector<char *> filelist(file_list_length);
+	//Grab filename and stick it into filelist vector
+	for (int32 i = 0; i < file_list_length; i++) {
+		filelist[i] = file_list[i];
+	}
+	//Grab channel list
+	std::vector<int16> channel_list;
+	getChannelList(filelist[0], &channel_list);
+	for(int i = 0; i < channel_list.size(); i++){
+		printf("%i\n", channel_list[i]);
+	}
+
+}
+
+extern "C" void EXPORT testOffset(PyObject *offset_py, int offset_len){
+	std::vector<int64> offset_vec(offset_len,0);
+	for(int i = 0; i < offset_len; i++){
+		offset_vec[i] = PyLong_AsLongLong(PyList_GetItem(offset_py, i));
+	}
+	for(int i = 0; i < offset_len; i++){
+		printf("%lli\n", offset_vec[i]);
+	}
 }

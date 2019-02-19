@@ -51,7 +51,7 @@ const double tagger_resolution = 82.3e-12;
 //const int32 offset[3] = { 0, 219, 211 };
 //const int64 offset[3] = { 0, -23, 299 };
 //const int64 offset[3] = { 25, 0, 311 };
-const int64 offset[3] = {181, 157, 0};
+//const int64 offset[3] = {181, 157, 0};
 
 struct shotData {
 	bool file_load_completed;
@@ -126,6 +126,53 @@ void calculateDenom_g3(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing
 
 }
 
+void calculateDenom_g3_for_channel_trip(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *denom, int32 shot_file_num, int32 channel_1, int32 channel_2, int32 channel_3) {
+	
+	int64 start_clock = shot_data->sorted_clock_bins[1][0];
+	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
+	std::vector<std::vector<int32>> denom_counts(*max_pulse_distance * 2 + 1, std::vector<int32>(*max_pulse_distance * 2 + 1,0));
+	#pragma omp parallel for
+	for (int64 pulse_dist_1 = -*max_pulse_distance; pulse_dist_1 <= *max_pulse_distance; pulse_dist_1++) {
+		for (int64 pulse_dist_2 = -*max_pulse_distance; pulse_dist_2 <= *max_pulse_distance; pulse_dist_2++) {
+			if ((pulse_dist_1 != 0) && (pulse_dist_2 != 0) && (pulse_dist_1 != pulse_dist_2)) {
+				int64 tau_1 = *pulse_spacing * pulse_dist_1;
+				int64 tau_2 = *pulse_spacing * pulse_dist_2;
+				int64 i = 0;
+				int64 j = 0;
+				int64 k = 0;
+				while ((i < shot_data->sorted_photon_tag_pointers[channel_1]) && (j < shot_data->sorted_photon_tag_pointers[channel_2]) && (k < shot_data->sorted_photon_tag_pointers[channel_3])) {
+					//Check if we're outside the window of interest
+					int32 out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
+					//chan_1 > chan_2
+					int32 c1gc2 = shot_data->sorted_photon_bins[channel_1][i] > (shot_data->sorted_photon_bins[channel_2][j] - tau_1);
+					//Chan_1 > chan_3
+					int32 c1gc3 = shot_data->sorted_photon_bins[channel_1][i] > (shot_data->sorted_photon_bins[channel_3][k] - tau_2);
+					//Chan_1 == chan_2
+					int32 c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau_1);
+					//Chan_1 == chan_3
+					int32 c1ec3 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_3][k] - tau_2);
+
+					//Increment the running total if all three are equal and we're in the window
+					denom_counts[pulse_dist_1 + *max_pulse_distance][pulse_dist_2 + *max_pulse_distance] += !out_window && c1ec2 && c1ec3;
+
+					//Increment j if chan_2 < chan_1 or all three are equal
+					j += c1gc2 || (c1ec2 && c1ec3);
+					//Increment k if chan_3 < chan_1 or all three are equal
+					k += c1gc3 || (c1ec2 && c1ec3);
+
+					//Increment i if we're out the window or if chan_1 <= chan_2 and chan_1 <= chan_3
+					i += out_window || (!c1gc2 && !c1gc3);
+				}
+			}
+		}
+	}
+	for (int64 pulse_dist_1 = -*max_pulse_distance; pulse_dist_1 <= *max_pulse_distance; pulse_dist_1++) {
+		for (int64 pulse_dist_2 = -*max_pulse_distance; pulse_dist_2 <= *max_pulse_distance; pulse_dist_2++) {
+			denom[0] += denom_counts[pulse_dist_1 + *max_pulse_distance][pulse_dist_2 + *max_pulse_distance];
+		}
+	}
+}
+
 int64 first_above_binary_search(std::vector<int64> *a, int64 N, int64 b) {
 	int64 L = 0;
 	int64 R = N - 1;
@@ -184,279 +231,153 @@ int64 first_below_binary_search(std::vector<int64> *a, int64 N, int64 b) {
 	return return_val;
 }
 
-void calculateNumer_g2(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *coinc, int32 shot_file_num, int32 num_cpu_threads_proc) {
-	
+void calculateNumer_g3_for_channel_trip(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *coinc, int32 shot_file_num, int32 num_cpu_threads_proc, int32 channel_1, int32 channel_2, int32 channel_3) {
+
 	//Get the start and stop clock bin
 	int64 start_clock = shot_data->sorted_clock_bins[1][0];
 	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
 
-	//Loop over all the channels to be channel 1
-	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
-
+	//Make sure we've actually got some tags in channel 1
+	if((shot_data->sorted_photon_tag_pointers[channel_1] > 0) && (shot_data->sorted_photon_tag_pointers[channel_2] > 0) && (shot_data->sorted_photon_tag_pointers[channel_3] > 0)){
 		//Make sure we've actually got some tags in channel 1
-		if(shot_data->sorted_photon_tag_pointers[channel_1] > 0){
-			//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
-			int64 low_index;
-			int64 high_index;
-			//Figure out which indices in the first thread we can ignore
-			#pragma omp parallel for
-			for (int32 i = 0; i < 2; i++) {
-				if (i == 0) {
-					low_index = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], *max_bin + *max_pulse_distance * *pulse_spacing + start_clock);
-				}
-				else {
-					high_index = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing));
-				}
+		//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
+		int64 low_index;
+		int64 high_index;
+		//Figure out which indices in the first thread we can ignore
+		#pragma omp parallel for
+		for (int8 i = 0; i < 2; i++) {
+			if (i == 0) {
+				low_index = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], *max_bin + *max_pulse_distance * *pulse_spacing + start_clock);
 			}
-
-			//Split the remaining indices between the work threads we have
-			int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
-			for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
-				
-				//Check there are tags in channel 2
-				if(shot_data->sorted_photon_tag_pointers[channel_2] > 0){
-					//Vector to hold the relevant indices on channel 2, for each tag on channel 1, that falls with the max/min tau
-					std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
-					#pragma omp parallel for num_threads(num_cpu_threads_proc)
-					for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
-						
-						//Find out form this thread what the first and last indices to work on are
-						int64 first_index = thread*indices_per_thread + low_index;
-						int64 last_index;
-						if (thread == num_cpu_threads_proc - 1) {
-							last_index = high_index;
-						}
-						else {
-							last_index = first_index + indices_per_thread-1;
-						}
-
-						//Do a binary search to find the first and last relevant tag on channel 2 for the first tag on channel 1 that the thread is working on
-						int64 lower_pointer = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);;
-						int64 upper_pointer = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
-
-						//Save the relevant tags on channel 2
-						channel_2_indices[first_index-low_index][0] = lower_pointer;
-						channel_2_indices[first_index-low_index][1] = upper_pointer;
-
-						//Loop over all the channel 1 indices this thread needs to work on
-						for (int64 i = first_index + 1; i <= last_index; i++) {
-
-							//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
-							bool going = true;
-							int64 j = lower_pointer;
-							while (going) {
-								if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-									j++;
-									lower_pointer = j;
-								}
-								else if (shot_data->sorted_photon_bins[channel_2][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-									going = false;
-									lower_pointer = j;
-								}
-								if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-									going = false;
-									lower_pointer = j;
-								}
-							}
-							//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
-							j = upper_pointer;
-							//Ensure j can't be negative
-							if(j < 0){
-								j = 0;
-							}
-							going = true;
-							while (going) {
-								if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-									j++;
-									upper_pointer = j;
-								}
-								else if (shot_data->sorted_photon_bins[channel_2][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-									going = false;
-									upper_pointer = j - 1;
-								}
-								if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-									going = false;
-									upper_pointer = shot_data->sorted_photon_tag_pointers[channel_2] - 1;
-								}
-							}
-							//Save the relevant tags to the vector for later
-							channel_2_indices[i - low_index][0] = lower_pointer;
-							channel_2_indices[i - low_index][1] = upper_pointer;
-						}
-						//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
-						for (int64 i = first_index; i <= last_index; i++) {
-							for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
-								int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
-								coinc[id_x + thread * ((*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc * ((*max_bin * 2 + 1))]++;
-							}
-						}
-					}
-				}
-
+			else {
+				high_index = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing));
 			}
 		}
-	}
-}
 
-void calculateNumer_g3(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *coinc, int32 shot_file_num, int32 num_cpu_threads_proc) {
-
-	//Get the start and stop clock bin
-	int64 start_clock = shot_data->sorted_clock_bins[1][0];
-	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
-
-	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
-		//Make sure we've actually got some tags in channel 1
-		if(shot_data->sorted_photon_tag_pointers[channel_1] > 0){
-			//Let's find out which indicies from channel 1 we can discard due to them being outside of the window of interest
-			int64 low_index;
-			int64 high_index;
-			//Figure out which indices in the first thread we can ignore
-			#pragma omp parallel for
-			for (int8 i = 0; i < 2; i++) {
-				if (i == 0) {
-					low_index = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], *max_bin + *max_pulse_distance * *pulse_spacing + start_clock);
-				}
-				else {
-					high_index = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_1]), shot_data->sorted_photon_tag_pointers[channel_1], end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing));
-				}
+		//Split the remaining indices between the work threads we have
+		int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
+		//Vector to hold the relevant indices on channel 2 and 3, for each tag on channel 1, that falls with the max/min tau
+		std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
+		std::vector<std::vector<int64>> channel_3_indices(high_index - low_index + 1, std::vector<int64>(2));
+		#pragma omp parallel for num_threads(num_cpu_threads_proc)
+		for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
+			//Find out form this thread what the first and last indices to work on are
+			int64 first_index = thread*indices_per_thread + low_index;
+			int64 last_index;
+			if (thread == num_cpu_threads_proc - 1) {
+				last_index = high_index;
+			}
+			else {
+				last_index = first_index + indices_per_thread - 1;
 			}
 
-			//Split the remaining indices between the work threads we have
-			int64 indices_per_thread = (high_index - low_index) / num_cpu_threads_proc;
+			//Do a binary search to find the first and last relevant tag on channel 2 and 3 for the first tag on channel 1 that the thread is working on
+			int64 lower_pointer_2 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
+			int64 upper_pointer_2 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
+			int64 lower_pointer_3 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
+			int64 upper_pointer_3 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
 
-			for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
-				//Make sure we've actually got some tags in channel 2
-				if(shot_data->sorted_photon_tag_pointers[channel_2] > 0){
-					for (int32 channel_3 = channel_2 + 1; channel_3 < shot_data->channel_list.size(); channel_3++) {
-						//Make sure we've actually got some tags in channel 3
-						if(shot_data->sorted_photon_tag_pointers[channel_3] > 0){
-							//Vector to hold the relevant indices on channel 2 and 3, for each tag on channel 1, that falls with the max/min tau
-							std::vector<std::vector<int64>> channel_2_indices(high_index - low_index + 1, std::vector<int64>(2));
-							std::vector<std::vector<int64>> channel_3_indices(high_index - low_index + 1, std::vector<int64>(2));
-							#pragma omp parallel for num_threads(num_cpu_threads_proc)
-							for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
-								//Find out form this thread what the first and last indices to work on are
-								int64 first_index = thread*indices_per_thread + low_index;
-								int64 last_index;
-								if (thread == num_cpu_threads_proc - 1) {
-									last_index = high_index;
-								}
-								else {
-									last_index = first_index + indices_per_thread - 1;
-								}
+			//Save the relevant tags on channel 2 and 3
+			channel_2_indices[first_index - low_index][0] = lower_pointer_2;
+			channel_2_indices[first_index - low_index][1] = upper_pointer_2;
+			channel_3_indices[first_index - low_index][0] = lower_pointer_3;
+			channel_3_indices[first_index - low_index][1] = upper_pointer_3;
 
-								//Do a binary search to find the first and last relevant tag on channel 2 and 3 for the first tag on channel 1 that the thread is working on
-								int64 lower_pointer_2 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
-								int64 upper_pointer_2 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_2]), shot_data->sorted_photon_tag_pointers[channel_2], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
-								int64 lower_pointer_3 = first_above_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] - *max_bin);
-								int64 upper_pointer_3 = first_below_binary_search(&(shot_data->sorted_photon_bins[channel_3]), shot_data->sorted_photon_tag_pointers[channel_3], shot_data->sorted_photon_bins[channel_1][first_index] + *max_bin);
+			for (int64 i = first_index; i <= last_index; i++) {
+				//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
+				bool going = true;
+				int64 j = lower_pointer_2;
+				while (going) {
+					if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+						j++;
+						lower_pointer_2 = j;
+					}
+					else if (shot_data->sorted_photon_bins[channel_2][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+						going = false;
+						lower_pointer_2 = j;
+					}
+					if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
+						going = false;
+						lower_pointer_2 = j;
+					}
+				}
+				//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
+				j = upper_pointer_2;
+				//Ensure j can't be negative
+				if(j < 0){
+					j = 0;
+				}
+				going = true;
+				while (going) {
+					if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+						j++;
+						upper_pointer_2 = j;
+					}
+					else if (shot_data->sorted_photon_bins[channel_2][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+						going = false;
+						upper_pointer_2 = j - 1;
+					}
+					if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
+						going = false;
+						upper_pointer_2 = shot_data->sorted_photon_tag_pointers[channel_2] - 1;
+					}
+				}
+				//Save the relevant tags to the vector for later
+				channel_2_indices[i - low_index][0] = lower_pointer_2;
+				channel_2_indices[i - low_index][1] = upper_pointer_2;
 
-								//Save the relevant tags on channel 2 and 3
-								channel_2_indices[first_index - low_index][0] = lower_pointer_2;
-								channel_2_indices[first_index - low_index][1] = upper_pointer_2;
-								channel_3_indices[first_index - low_index][0] = lower_pointer_3;
-								channel_3_indices[first_index - low_index][1] = upper_pointer_3;
+				//Find the first tag on channel 3 that is within the max/min tau of the current channel 1 tag
+				going = true;
+				j = lower_pointer_3;
+				while (going) {
+					if (shot_data->sorted_photon_bins[channel_3][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+						j++;
+						lower_pointer_3 = j;
+					}
+					else if (shot_data->sorted_photon_bins[channel_3][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
+						going = false;
+						lower_pointer_3 = j;
+					}
+					if (j > shot_data->sorted_photon_tag_pointers[channel_3]) {
+						going = false;
+						lower_pointer_3 = j;
+					}
+				}
+				//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
+				j = upper_pointer_3;
+				//Ensure j can't be negative
+				if(j < 0){
+					j = 0;
+				}
+				going = true;
+				while (going) {
+					if (shot_data->sorted_photon_bins[channel_3][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+						j++;
+						upper_pointer_3 = j;
+					}
+					else if (shot_data->sorted_photon_bins[channel_3][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
+						going = false;
+						upper_pointer_3 = j - 1;
+					}
+					if (j > shot_data->sorted_photon_tag_pointers[channel_3]) {
+						going = false;
+						upper_pointer_3 = shot_data->sorted_photon_tag_pointers[channel_3] - 1;
+					}
+				}
+				//Save the relevant tags to the vector for later
+				channel_3_indices[i - low_index][0] = lower_pointer_3;
+				channel_3_indices[i - low_index][1] = upper_pointer_3;
+			}
+			//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
+			for (int64 i = first_index; i <= last_index; i++) {
+				for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
+					for (int64 k = channel_3_indices[i - low_index][0]; k <= channel_3_indices[i - low_index][1]; k++) {
 
-								for (int64 i = first_index; i <= last_index; i++) {
-									//Find the first tag on channel 2 that is within the max/min tau of the current channel 1 tag
-									bool going = true;
-									int64 j = lower_pointer_2;
-									while (going) {
-										if (shot_data->sorted_photon_bins[channel_2][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-											j++;
-											lower_pointer_2 = j;
-										}
-										else if (shot_data->sorted_photon_bins[channel_2][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-											going = false;
-											lower_pointer_2 = j;
-										}
-										if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-											going = false;
-											lower_pointer_2 = j;
-										}
-									}
-									//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
-									j = upper_pointer_2;
-									//Ensure j can't be negative
-									if(j < 0){
-										j = 0;
-									}
-									going = true;
-									while (going) {
-										if (shot_data->sorted_photon_bins[channel_2][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-											j++;
-											upper_pointer_2 = j;
-										}
-										else if (shot_data->sorted_photon_bins[channel_2][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-											going = false;
-											upper_pointer_2 = j - 1;
-										}
-										if (j > shot_data->sorted_photon_tag_pointers[channel_2]) {
-											going = false;
-											upper_pointer_2 = shot_data->sorted_photon_tag_pointers[channel_2] - 1;
-										}
-									}
-									//Save the relevant tags to the vector for later
-									channel_2_indices[i - low_index][0] = lower_pointer_2;
-									channel_2_indices[i - low_index][1] = upper_pointer_2;
+						int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
+						int64 id_y = shot_data->sorted_photon_bins[channel_3][k] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
+						int64 tot_id = id_y * (2 * (*max_bin) + 1) + id_x;
+						coinc[tot_id + thread * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc  * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1))]++;
 
-									//Find the first tag on channel 3 that is within the max/min tau of the current channel 1 tag
-									going = true;
-									j = lower_pointer_3;
-									while (going) {
-										if (shot_data->sorted_photon_bins[channel_3][j] < shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-											j++;
-											lower_pointer_3 = j;
-										}
-										else if (shot_data->sorted_photon_bins[channel_3][j] >= shot_data->sorted_photon_bins[channel_1][i] - *max_bin) {
-											going = false;
-											lower_pointer_3 = j;
-										}
-										if (j > shot_data->sorted_photon_tag_pointers[channel_3]) {
-											going = false;
-											lower_pointer_3 = j;
-										}
-									}
-									//Find the last tag on channel 2 that is within the max/min tau of the current channel 1 tag
-									j = upper_pointer_3;
-									//Ensure j can't be negative
-									if(j < 0){
-										j = 0;
-									}
-									going = true;
-									while (going) {
-										if (shot_data->sorted_photon_bins[channel_3][j] <= shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-											j++;
-											upper_pointer_3 = j;
-										}
-										else if (shot_data->sorted_photon_bins[channel_3][j] > shot_data->sorted_photon_bins[channel_1][i] + *max_bin) {
-											going = false;
-											upper_pointer_3 = j - 1;
-										}
-										if (j > shot_data->sorted_photon_tag_pointers[channel_3]) {
-											going = false;
-											upper_pointer_3 = shot_data->sorted_photon_tag_pointers[channel_3] - 1;
-										}
-									}
-									//Save the relevant tags to the vector for later
-									channel_3_indices[i - low_index][0] = lower_pointer_3;
-									channel_3_indices[i - low_index][1] = upper_pointer_3;
-								}
-								//Loop through all the tags on the thread has worked on to find the tau bin which the tags on channel 2 fall into
-								for (int64 i = first_index; i <= last_index; i++) {
-									for (int64 j = channel_2_indices[i - low_index][0]; j <= channel_2_indices[i - low_index][1]; j++) {
-										for (int64 k = channel_3_indices[i - low_index][0]; k <= channel_3_indices[i - low_index][1]; k++) {
-
-											int64 id_x = shot_data->sorted_photon_bins[channel_2][j] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
-											int64 id_y = shot_data->sorted_photon_bins[channel_3][k] - shot_data->sorted_photon_bins[channel_1][i] + *max_bin;
-											int64 tot_id = id_y * (2 * (*max_bin) + 1) + id_x;
-											coinc[tot_id + thread * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1)) + shot_file_num * num_cpu_threads_proc  * ((*max_bin * 2 + 1) * (*max_bin * 2 + 1))]++;
-
-										}
-									}
-								}
-							}
-						}
 					}
 				}
 			}
@@ -624,48 +545,6 @@ void calculateNumer_g2_pulse(shotData *shot_data, int64 *min_bin_1, int64 *max_b
 	}
 }
 
-void calculateDenom_g2(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *denom, int32 shot_file_num) {
-
-	int64 start_clock = shot_data->sorted_clock_bins[1][0];
-	int64 end_clock = shot_data->sorted_clock_bins[0][shot_data->sorted_clock_tag_pointers[0] - 1];
-
-	for (int32 channel_1 = 0; channel_1 < shot_data->channel_list.size(); channel_1++) {
-		//Make sure we've actually got some tags in channel 1
-		if(shot_data->sorted_photon_tag_pointers[channel_1] > 0){
-			for (int32 channel_2 = channel_1 + 1; channel_2 < shot_data->channel_list.size(); channel_2++) {
-				//Make sure we've actually got some tags in channel 2
-				if(shot_data->sorted_photon_tag_pointers[channel_2] > 0){
-					std::vector<int32> denom_counts(*max_pulse_distance * 2 + 1, 0);
-					#pragma omp parallel for
-					for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
-						if (pulse_dist != 0) {
-							int64 tau = *pulse_spacing * pulse_dist;
-							int64 i = 0;
-							int64 j = 0;
-							while ((i < shot_data->sorted_photon_tag_pointers[channel_1]) && (j < shot_data->sorted_photon_tag_pointers[channel_2])) {
-								//Check if we're outside the window of interest
-								int32 out_window = (shot_data->sorted_photon_bins[channel_1][i] < (*max_bin + *max_pulse_distance * *pulse_spacing + start_clock)) || (shot_data->sorted_photon_bins[channel_1][i] > (end_clock - (*max_bin + *max_pulse_distance * *pulse_spacing)));
-								//chan_1 > chan_2
-								int32 c1gc2 = shot_data->sorted_photon_bins[channel_1][i] >(shot_data->sorted_photon_bins[channel_2][j] - tau);
-								//Check if we have a common element increment
-								int32 c1ec2 = shot_data->sorted_photon_bins[channel_1][i] == (shot_data->sorted_photon_bins[channel_2][j] - tau);
-								//Increment running total if channel 1 equals channel 2
-								denom_counts[pulse_dist + *max_pulse_distance] += !out_window && c1ec2;
-								//Increment channel 1 if it is greater than channel 2, equal to channel 2 or ouside of the window
-								i += (!c1gc2 || out_window);
-								j += (c1gc2 || c1ec2);
-							}
-						}
-					}
-					for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
-						denom[0] += denom_counts[pulse_dist + *max_pulse_distance];
-					}
-				}
-			}
-		}
-	}
-}
-
 void calculateNumer_g2_for_channel_pair(shotData *shot_data, int64 *max_bin, int64 *pulse_spacing, int64 *max_pulse_distance, int32 *coinc, int32 shot_file_num, int32 num_cpu_threads_proc, int32 channel_1, int32 channel_2) {
 	
 	//Make sure we've actually got some tags in channel 1
@@ -803,6 +682,30 @@ void calculateDenom_g2_for_channel_pair(shotData *shot_data, int64 *max_bin, int
 		for (int64 pulse_dist = -*max_pulse_distance; pulse_dist <= *max_pulse_distance; pulse_dist++) {
 			denom[0] += denom_counts[pulse_dist + *max_pulse_distance];
 		}
+	}
+}
+
+void getChannelList(char* filename, std::vector<int16>* channel_list, std::map<int16, int16>* channel_map){
+	//Open up file
+	H5::H5File file(filename, H5F_ACC_RDONLY);
+	//Open up "Inform" group
+	H5::Group inform_group(file.openGroup("Inform"));
+	//Grab channel list
+	H5::DataSet chan_dset(inform_group.openDataSet("ChannelList"));
+	H5::DataSpace chan_dspace = chan_dset.getSpace();
+	hsize_t chan_length[1];
+	chan_dspace.getSimpleExtentDims(chan_length, NULL);
+	channel_list->resize(chan_length[0]);
+	chan_dset.read(&(*channel_list)[0u], H5::PredType::NATIVE_UINT16, chan_dspace);
+	chan_dspace.close();
+	chan_dset.close();
+	//Close Inform group
+	inform_group.close();
+	//Close file
+	file.close();
+	//Populate channel map
+	for (int16 i = 0; i < channel_list->size(); i++) {
+		(*channel_map)[(*channel_list)[i]] = i;
 	}
 }
 
@@ -969,13 +872,13 @@ void sortTags(shotData *shot_data) {
 }
 
 //Converts our tags to bins with a given bin width
-void tagsToBins(shotData *shot_data, double bin_width) {
+void tagsToBins(shotData *shot_data, double bin_width, std::vector<int64> *offset) {
 	int64 tagger_bins_per_bin_width = (int64)round(bin_width / tagger_resolution);
 	#pragma omp parallel for
 	for (int32 channel = 0; channel < shot_data->sorted_photon_bins.size(); channel++) {
 	#pragma omp parallel for
 		for (int32 i = 0; i < shot_data->sorted_photon_tag_pointers[channel]; i++) {
-			shot_data->sorted_photon_bins[channel][i] = (shot_data->sorted_photon_tags[channel][i] + offset[channel]) / tagger_bins_per_bin_width;
+			shot_data->sorted_photon_bins[channel][i] = (shot_data->sorted_photon_tags[channel][i] + (*offset)[channel]) / tagger_bins_per_bin_width;
 		}
 	}
 	for (int32 slope = 0; slope <= 1; slope++) {
@@ -987,17 +890,17 @@ void tagsToBins(shotData *shot_data, double bin_width) {
 }
 
 //Sorts photons and bins them for each file in a block
-void sortAndBinBlock(std::vector<shotData> *shot_block, double bin_width, int32 num_devices, int32 block_size) {
-#pragma omp parallel for
+void sortAndBinBlock(std::vector<shotData> *shot_block, double bin_width, int32 num_devices, int32 block_size, std::vector<int64> *offset) {
+	#pragma omp parallel for
 	for (int32 shot_file_num = 0; shot_file_num < (block_size * num_devices); shot_file_num++) {
 		if ((*shot_block)[shot_file_num].file_load_completed) {
 			sortTags(&(*shot_block)[shot_file_num]);
-			tagsToBins(&(*shot_block)[shot_file_num], bin_width);
+			tagsToBins(&(*shot_block)[shot_file_num], bin_width, offset);
 		}
 	}
 }
 
-void countTags(shotData *shot_data, std::vector<int32> *tot_counts, std::vector<int32> *masked_counts, std::vector<int32> *mask_block_counts, std::vector<int32> *channel_vec) {
+void countTags(shotData *shot_data, std::vector<int32> *tot_counts, std::vector<int32> *masked_counts, std::vector<int32> *mask_block_counts, std::vector<int16> *channel_vec) {
 	int64 high_count = 0;
 	//Clock pointer
 	int64 clock_pointer = 0;
@@ -1057,24 +960,30 @@ void countTags(shotData *shot_data, std::vector<int32> *tot_counts, std::vector<
 	}
 }
 
-extern "C" void EXPORT getG3Correlations(char **file_list, int32 file_list_length, double max_time, double bin_width, double pulse_spacing, int64 max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int32 num_cpu_threads_files, int32 num_cpu_threads_proc) {
+extern "C" void EXPORT getG3Correlations_tripletwise(char **file_list, int32 file_list_length, double max_time, double bin_width, double pulse_spacing, int64 max_pulse_distance, PyObject *numer, PyObject *denom, bool calc_norm, int32 num_cpu_threads_files, int32 num_cpu_threads_proc, PyObject *corr_channel_list, bool disp_counts, PyObject *offset_list) {
 
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
 	for (int32 i = 0; i < file_list_length; i++) {
 		filelist[i] = file_list[i];
 	}
-
+	//Figure out max bin and the pulse spacing in multiples of the bin width
 	int64 max_bin = (int64)round(max_time / bin_width);
 	int64 bin_pulse_spacing = (int64)round(pulse_spacing / bin_width);
 
-	int32 *coinc;
-	coinc = (int32*)malloc((((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads_files * num_cpu_threads_proc * sizeof(int32));
+	//Get length of list of channel pairs
+	int corr_channel_list_length = PyObject_Length(corr_channel_list);
 
-	for (int32 id = 0; id < (((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
-		coinc[id] = 0;
+	//Make a coincidence vector the appropriate size
+	std::vector<int32 *> coinc(corr_channel_list_length);
+	for(int channel_list_id  = 0; channel_list_id  < corr_channel_list_length; channel_list_id ++){
+		coinc[channel_list_id] = (int32*)malloc((((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads_files * num_cpu_threads_proc * sizeof(int32));
+
+		for (int32 id = 0; id < (((2 * (max_bin)+1) * (2 * (max_bin)+1))) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
+			coinc[channel_list_id][id] = 0;
+		}
 	}
-
+	//Figure out how many blocks we need to chunk the files into
 	int32 blocks_req;
 	if (file_list_length < (num_cpu_threads_files)) {
 		blocks_req = 1;
@@ -1086,12 +995,54 @@ extern "C" void EXPORT getG3Correlations(char **file_list, int32 file_list_lengt
 		blocks_req = file_list_length / (num_cpu_threads_files)+1;
 	}
 
-	std::vector<int32> denom_counts(num_cpu_threads_files, 0);
+	//Get the channel list for the first file
+	std::vector<int16> channel_vec;
+	std::map<int16, int16> channel_map;
+	if(file_list_length > 0){
+		getChannelList(filelist[0], &channel_vec, &channel_map);
+	}
+
+	//Convert python channel lists into channel lists the correlations calculations understand
+	std::vector<int16> corr_channel_1_vec(corr_channel_list_length,-1);
+	std::vector<int16> corr_channel_2_vec(corr_channel_list_length,-1);
+	std::vector<int16> corr_channel_3_vec(corr_channel_list_length,-1);
+	for(int i = 0; i < corr_channel_list_length; i++){
+		PyObject* channel_trip = PyList_GetItem(corr_channel_list,i);
+		//Check if the channels exist in our map
+		if((channel_map.find(PyLong_AsLong(PyList_GetItem(channel_trip, 0))) != channel_map.end()) && (channel_map.find(PyLong_AsLong(PyList_GetItem(channel_trip, 1))) != channel_map.end()) && (channel_map.find(PyLong_AsLong(PyList_GetItem(channel_trip, 2))) != channel_map.end())){
+			//If both channels exist add them to be calculated
+			corr_channel_1_vec[i] = (channel_map.find(PyLong_AsLong(PyList_GetItem(channel_trip, 0)))->second);
+			corr_channel_2_vec[i] = (channel_map.find(PyLong_AsLong(PyList_GetItem(channel_trip, 1)))->second);
+			corr_channel_3_vec[i] = (channel_map.find(PyLong_AsLong(PyList_GetItem(channel_trip, 2)))->second);
+		}
+		else{
+			printf("Couldn't find %i, %i & %i channel trip\n", PyLong_AsLong(PyList_GetItem(channel_trip, 0)), PyLong_AsLong(PyList_GetItem(channel_trip, 1)), PyLong_AsLong(PyList_GetItem(channel_trip, 2)));
+		}
+	}
+
+	//Convert offset pyobject to an offset vector
+	std::vector<int64> offset_vec(channel_vec.size(),0);
+	for(int i = 0; i < PyObject_Length(offset_list); i++){
+		PyObject *offset_pair = PyList_GetItem(offset_list,i);
+		//Lookup channel and put it into offset_vec
+		if(channel_map.find(PyLong_AsLong(PyList_GetItem(offset_pair, 0))) != channel_map.end()){
+			offset_vec[channel_map.find(PyLong_AsLong(PyList_GetItem(offset_pair, 0)))->second] = PyLong_AsLong(PyList_GetItem(offset_pair, 1));
+		}
+	}
+
+	//Vector containing the masked counts and total counts for each channel
+	std::vector<std::vector<int32>> masked_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
+	std::vector<std::vector<int32>> tot_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
+	std::vector<std::vector<int32>> masked_block_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
+	//The masked and total time
+	double tot_time = 0;
+	double mask_block_time = 0;
+
+	std::vector<std::vector<int32>> denom_counts(corr_channel_list_length,std::vector<int32>(num_cpu_threads_files,0));
 
 	printf("Chunking %i files into %i blocks\n", file_list_length, blocks_req);
 	printf("Max Time\tBin Width\tPulse Spacing\tMax Pulse Distance\n");
 	printf("%fus\t%fns\t%fus\t%i\n", max_time * 1e6, bin_width * 1e9, pulse_spacing * 1e6, max_pulse_distance);
-
 	//Processes files in blocks
 	for (int32 block_num = 0; block_num < blocks_req; block_num++) {
 		//Allocate a vector to hold a block of shot_data
@@ -1101,15 +1052,34 @@ extern "C" void EXPORT getG3Correlations(char **file_list, int32 file_list_lengt
 		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
 
 		//Sort tags and convert them to bins
-		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files);
+		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files, &offset_vec);
+
+		if(disp_counts){
+			//Get the start and stop clock bin
+			for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
+				if ((shot_block)[shot_file_num].file_load_completed) {
+					int64 start_tag = ((shot_block[shot_file_num].start_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].start_tags[1] >> 1) & 0x7FFFFFF);
+					int64 end_tag = ((shot_block[shot_file_num].end_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].end_tags[1] >> 1) & 0x7FFFFFF);
+					tot_time += (double)(end_tag-start_tag) * tagger_resolution;
+					mask_block_time += (double)(shot_block[shot_file_num].sorted_clock_tags[0][shot_block[shot_file_num].sorted_clock_tag_pointers[0] - 1] - shot_block[shot_file_num].sorted_clock_tags[1][0]) * tagger_resolution;
+				}
+			}
+		}
 
 		//Processes files
 		#pragma omp parallel for num_threads(num_cpu_threads_files)
 		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
 			if ((shot_block)[shot_file_num].file_load_completed) {
-				calculateNumer_g3(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num,num_cpu_threads_proc);
-				if (calc_norm) {
-					calculateDenom_g3(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[shot_file_num]), shot_file_num);
+				for(int32 channel_list_id = 0; channel_list_id < corr_channel_list_length; channel_list_id++){
+					if((corr_channel_1_vec[channel_list_id] != -1) && (corr_channel_2_vec[channel_list_id] != -1) && (corr_channel_3_vec[channel_list_id] != -1)){
+						calculateNumer_g3_for_channel_trip(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &coinc[channel_list_id][0], shot_file_num,num_cpu_threads_proc, corr_channel_1_vec[channel_list_id], corr_channel_2_vec[channel_list_id], corr_channel_3_vec[channel_list_id]);
+						if (calc_norm) {
+							calculateDenom_g3_for_channel_trip(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[channel_list_id][shot_file_num]), shot_file_num, corr_channel_1_vec[channel_list_id], corr_channel_2_vec[channel_list_id], corr_channel_3_vec[channel_list_id]);
+						}
+					}
+				}
+				if(disp_counts){
+					countTags(&(shot_block[shot_file_num]), &(tot_counts[shot_file_num]), &(masked_counts[shot_file_num]), &(masked_block_counts[shot_file_num]), &channel_vec);
 				}
 			}
 		}
@@ -1118,93 +1088,47 @@ extern "C" void EXPORT getG3Correlations(char **file_list, int32 file_list_lengt
 	}
 
 	//Collapse streamed coincidence counts down to regular numerator and denominator
-	for (int32 i = 0; i < num_cpu_threads_files; i++) {
-		for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
-			for (int32 j = 0; j < (((2 * (max_bin)+1) * (2 * (max_bin)+1))); j++) {
-				PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + thread * ((2 * (max_bin)+1) * (2 * (max_bin)+1)) + i * num_cpu_threads_proc * ((2 * (max_bin)+1) * (2 * (max_bin)+1))]));
-			}
-		}
-		denom[0] += denom_counts[i];
-	}
-	free(coinc);
-
-	printf("\n\n");
-}
-
-extern "C" void EXPORT getG2Correlations(char **file_list, int32 file_list_length, double max_time, double bin_width, double pulse_spacing, int64 max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int32 num_cpu_threads_files, int32 num_cpu_threads_proc) {
-
-	std::vector<char *> filelist(file_list_length);
-	//Grab filename and stick it into filelist vector
-	for (int32 i = 0; i < file_list_length; i++) {
-		filelist[i] = file_list[i];
-	}
-
-	int64 max_bin = (int64)round(max_time / bin_width);
-	int64 bin_pulse_spacing = (int64)round(pulse_spacing / bin_width);
-
-	int32 *coinc;
-	coinc = (int32*)malloc(((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc * sizeof(int32));
-	for (int32 id = 0; id < ((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
-		coinc[id] = 0;
-	}
-
-	int32 blocks_req;
-	if (file_list_length < (num_cpu_threads_files)) {
-		blocks_req = 1;
-	}
-	else if ((file_list_length % (num_cpu_threads_files)) == 0) {
-		blocks_req = file_list_length / (num_cpu_threads_files);
-	}
-	else {
-		blocks_req = file_list_length / (num_cpu_threads_files)+1;
-	}
-
-	printf("Chunking %i files into %i blocks\n", file_list_length, blocks_req);
-	printf("Max Time\tBin Width\tPulse Spacing\tMax Pulse Distance\n");
-	printf("%fus\t%fns\t%fus\t%i\n", max_time * 1e6, bin_width * 1e9, pulse_spacing * 1e6, max_pulse_distance);
-
-	std::vector<int32> denom_counts(num_cpu_threads_files,0);
-
-	//Processes files in blocks
-	for (int32 block_num = 0; block_num < blocks_req; block_num++) {
-		//Allocate a vector to hold a block of shot_data
-		std::vector<shotData> shot_block(num_cpu_threads_files);
-
-		//Populate the shot_block with data from file
-		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
-
-		//Sort tags and convert them to bins
-		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files);
-
-		//Processes files
-		#pragma omp parallel for num_threads(num_cpu_threads_files)
-		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
-			if ((shot_block)[shot_file_num].file_load_completed) {
-				calculateNumer_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num, num_cpu_threads_proc);
-				if (calc_norm) {
-					calculateDenom_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[shot_file_num]), shot_file_num);
+	for(int32 channel_list_id = 0; channel_list_id < corr_channel_list_length; channel_list_id++){
+		for (int32 i = 0; i < num_cpu_threads_files; i++) {
+			for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
+				for (int32 j = 0; j < (((2 * (max_bin)+1) * (2 * (max_bin)+1))); j++) {
+					PyList_SetItem(numer, j + channel_list_id * (((2 * (max_bin)+1) * (2 * (max_bin)+1))), PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[channel_list_id][j + thread * ((2 * (max_bin)+1) * (2 * (max_bin)+1)) + i * num_cpu_threads_proc * ((2 * (max_bin)+1) * (2 * (max_bin)+1))]));
 				}
 			}
+			PyList_SetItem(denom, channel_list_id, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(denom, channel_list_id)) + denom_counts[channel_list_id][i]));
 		}
-		printf("Finished block %i of %i\n", block_num + 1, blocks_req);
-
+	}
+	for(int32 channel_list_id = 0; channel_list_id < corr_channel_list_length; channel_list_id++){
+		free(coinc[channel_list_id]);
 	}
 
-	//Collapse streamed coincidence counts down to regular numerator and denominator
-	for (int32 i = 0; i < num_cpu_threads_files; i++) {
-		for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
-			for (int32 j = 0; j < ((2 * (max_bin)+1) + (max_pulse_distance * 2)); j++) {
-				if (j < (2 * (max_bin)+1)) {
-					PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + thread * ((2 * (max_bin)+1)) + i * num_cpu_threads_proc * ((2 * (max_bin)+1))]));
-				}
+	if(disp_counts){
+		//Collapse the counts down
+		std::vector<int32> tot_counts_collapse(channel_vec.size(),0);
+		std::vector<int32> masked_counts_collapse(channel_vec.size(),0);
+		std::vector<int32> masked_block_counts_collapse(channel_vec.size(),0);
+		for(int channel = 0; channel < channel_vec.size(); channel++){
+			for (int32 shot_file_num = 0; shot_file_num < (num_cpu_threads_files); shot_file_num++){
+				tot_counts_collapse[channel] += tot_counts[shot_file_num][channel];
+				masked_counts_collapse[channel] += masked_counts[shot_file_num][channel];
+				masked_block_counts_collapse[channel] += masked_block_counts[shot_file_num][channel];
 			}
 		}
-		denom[0] += denom_counts[i];
+
+		printf("Tot time\tMasked block time\n");
+		printf("%f\t%f\n",tot_time, mask_block_time);
+		printf("Count info:\n");
+		for(int i = 0; i < channel_vec.size(); i++){
+			printf("Channel %i:\n", channel_vec[i]);
+			printf("Singles Counts:\n");
+			printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
+			printf("%i\t\t%i\t\t%i\t\t%i\n", tot_counts_collapse[i], masked_counts_collapse[i], masked_block_counts_collapse[i] - masked_counts_collapse[i], tot_counts_collapse[i] - masked_block_counts_collapse[i]);
+			printf("Rates (s^-1):\n");
+			printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
+			printf("%.1f\t\t%.1f\t\t%.1f\t\t%.1f\n", ((double)tot_counts_collapse[i]) / tot_time, ((double)masked_counts_collapse[i]) / mask_block_time, (double)(masked_block_counts_collapse[i] - masked_counts_collapse[i]) / (mask_block_time), (double)(tot_counts_collapse[i] - masked_block_counts_collapse[i]) / (tot_time - mask_block_time));
+		}
 	}
-	free(coinc);
-
 	printf("\n\n");
-
 }
 
 extern "C" void EXPORT getG2Correlations_pulse(char **file_list, int32 file_list_length, double min_tau_1, double max_tau_1, double min_tau_2, double max_tau_2, double bin_width, PyObject *numer, int32 *denom, int32 num_cpu_threads_files) {
@@ -1241,6 +1165,14 @@ extern "C" void EXPORT getG2Correlations_pulse(char **file_list, int32 file_list
 		coinc[id] = 0;
 	}
 
+	//Get the channel list for the first file
+	std::vector<int16> channel_vec;
+	std::map<int16, int16> channel_map;
+	if(file_list_length > 0){
+		getChannelList(filelist[0], &channel_vec, &channel_map);
+	}
+	std::vector<int64> offset_vec(channel_vec.size(),0);
+
 	std::vector<int32> denom_counts(num_cpu_threads_files, 0);
 
 	//Processes files in blocks
@@ -1252,7 +1184,7 @@ extern "C" void EXPORT getG2Correlations_pulse(char **file_list, int32 file_list
 		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
 
 		//Sort tags and convert them to bins
-		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files);
+		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files, &offset_vec);
 
 		//Processes files
 		#pragma omp parallel for num_threads(num_cpu_threads_files)
@@ -1275,229 +1207,21 @@ extern "C" void EXPORT getG2Correlations_pulse(char **file_list, int32 file_list
 	printf("\n\n");
 }
 
-extern "C" void EXPORT getG2Correlations_with_rate_calc(char **file_list, int32 file_list_length, double max_time, double bin_width, double pulse_spacing, int64 max_pulse_distance, PyObject *numer, int32 *denom, bool calc_norm, int32 num_cpu_threads_files, int32 num_cpu_threads_proc, PyObject *singles_channel_list, int32 singles_channel_list_length) {
-
+extern "C" void EXPORT getG2Correlations_pairwise(char **file_list, int32 file_list_length, double max_time, double bin_width, double pulse_spacing, int64 max_pulse_distance, PyObject *numer, PyObject *denom, bool calc_norm, int32 num_cpu_threads_files, int32 num_cpu_threads_proc, PyObject *corr_channel_list, bool disp_counts, PyObject *offset_list) {
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
 	for (int32 i = 0; i < file_list_length; i++) {
 		filelist[i] = file_list[i];
 	}
 
+	//Figure out max bin and the pulse spacing in multiples of the bin width
 	int64 max_bin = (int64)round(max_time / bin_width);
 	int64 bin_pulse_spacing = (int64)round(pulse_spacing / bin_width);
 
-	int32 *coinc;
-	coinc = (int32*)malloc(((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc * sizeof(int32));
-	for (int32 id = 0; id < ((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
-		coinc[id] = 0;
-	}
+	//Get length of list of channel pairs
+	int corr_channel_list_length = PyObject_Length(corr_channel_list);
 
-	int32 blocks_req;
-	if (file_list_length < (num_cpu_threads_files)) {
-		blocks_req = 1;
-	}
-	else if ((file_list_length % (num_cpu_threads_files)) == 0) {
-		blocks_req = file_list_length / (num_cpu_threads_files);
-	}
-	else {
-		blocks_req = file_list_length / (num_cpu_threads_files)+1;
-	}
-
-	//Convert python list to vector, probably unnecessary but it made things easier
-	std::vector<int32> channel_vec(singles_channel_list_length,0);
-
-	//Populate channel map
-	for (int16 i = 0; i < singles_channel_list_length; i++) {
-		channel_vec[i] = PyLong_AsLong(PyList_GetItem(singles_channel_list, i));
-	}
-
-	//Vector containing the masked counts and total counts for each channel
-	std::vector<std::vector<int32>> masked_counts(num_cpu_threads_files, std::vector<int32>(singles_channel_list_length,0));
-	std::vector<std::vector<int32>> tot_counts(num_cpu_threads_files, std::vector<int32>(singles_channel_list_length,0));
-	std::vector<std::vector<int32>> masked_block_counts(num_cpu_threads_files, std::vector<int32>(singles_channel_list_length,0));
-	//The masked and total time
-	double tot_time = 0;
-	double mask_block_time = 0;
-
-	printf("Chunking %i files into %i blocks\n", file_list_length, blocks_req);
-	printf("Max Time\tBin Width\tPulse Spacing\tMax Pulse Distance\n");
-	printf("%fus\t%fns\t%fus\t%i\n", max_time * 1e6, bin_width * 1e9, pulse_spacing * 1e6, max_pulse_distance);
-
-	std::vector<int32> denom_counts(num_cpu_threads_files, 0);
-
-	//Processes files in blocks
-	for (int32 block_num = 0; block_num < blocks_req; block_num++) {
-		//Allocate a vector to hold a block of shot_data
-		std::vector<shotData> shot_block(num_cpu_threads_files);
-
-		//Populate the shot_block with data from file
-		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
-
-		//Sort tags and convert them to bins
-		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files);
-
-		//Get the start and stop clock bin
-		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
-			if ((shot_block)[shot_file_num].file_load_completed) {
-				int64 start_tag = ((shot_block[shot_file_num].start_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].start_tags[1] >> 1) & 0x7FFFFFF);
-				int64 end_tag = ((shot_block[shot_file_num].end_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].end_tags[1] >> 1) & 0x7FFFFFF);
-				tot_time += (double)(end_tag-start_tag) * tagger_resolution;
-				mask_block_time += (double)(shot_block[shot_file_num].sorted_clock_tags[0][shot_block[shot_file_num].sorted_clock_tag_pointers[0] - 1] - shot_block[shot_file_num].sorted_clock_tags[1][0]) * tagger_resolution;
-			}
-		}
-
-		//Processes files
-		#pragma omp parallel for num_threads(num_cpu_threads_files)
-		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
-			if ((shot_block)[shot_file_num].file_load_completed) {
-				calculateNumer_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, coinc, shot_file_num, num_cpu_threads_proc);
-				if(calc_norm) {
-					calculateDenom_g2(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[shot_file_num]), shot_file_num);
-				}
-				countTags(&(shot_block[shot_file_num]), &(tot_counts[shot_file_num]), &(masked_counts[shot_file_num]), &(masked_block_counts[shot_file_num]), &channel_vec);
-			}
-		}
-		printf("Finished block %i of %i\n", block_num + 1, blocks_req);
-
-	}
-
-	//Collapse streamed coincidence counts down to regular numerator and denominator
-	for(int32 i = 0; i < num_cpu_threads_files; i++) {
-		for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
-			for (int32 j = 0; j < ((2 * (max_bin)+1) + (max_pulse_distance * 2)); j++) {
-				if (j < (2 * (max_bin)+1)) {
-					PyList_SetItem(numer, j, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j)) + coinc[j + thread * ((2 * (max_bin)+1)) + i * num_cpu_threads_proc * ((2 * (max_bin)+1))]));
-				}
-			}
-		}
-		denom[0] += denom_counts[i];
-	}
-	free(coinc);
-
-	//Collapse the counts down
-	std::vector<int32> tot_counts_collapse(singles_channel_list_length,0);
-	std::vector<int32> masked_counts_collapse(singles_channel_list_length,0);
-	std::vector<int32> masked_block_counts_collapse(singles_channel_list_length,0);
-	for(int channel = 0; channel < singles_channel_list_length; channel++){
-		for (int32 shot_file_num = 0; shot_file_num < (num_cpu_threads_files); shot_file_num++){
-			tot_counts_collapse[channel] += tot_counts[shot_file_num][channel];
-			masked_counts_collapse[channel] += masked_counts[shot_file_num][channel];
-			masked_block_counts_collapse[channel] += masked_block_counts[shot_file_num][channel];
-		}
-	}
-
-	printf("Tot time\tMasked block time\n");
-	printf("%f\t%f\n",tot_time, mask_block_time);
-	printf("Count info:\n");
-	for(int i = 0; i < singles_channel_list_length; i++){
-		printf("Channel %i:\n", PyLong_AsLong(PyList_GetItem(singles_channel_list, i)));
-		printf("Singles Counts:\n");
-		printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
-		printf("%i\t\t%i\t\t%i\t\t%i\n", tot_counts_collapse[i], masked_counts_collapse[i], masked_block_counts_collapse[i] - masked_counts_collapse[i], tot_counts_collapse[i] - masked_block_counts_collapse[i]);
-		printf("Rates (s^-1):\n");
-		printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
-		printf("%.1f\t\t%.1f\t\t%.1f\t\t%.1f\n", ((double)tot_counts_collapse[i]) / tot_time, ((double)masked_counts_collapse[i]) / mask_block_time, (double)(masked_block_counts_collapse[i] - masked_counts_collapse[i]) / (mask_block_time), (double)(tot_counts_collapse[i] - masked_block_counts_collapse[i]) / (tot_time - mask_block_time));
-	}
-
-	printf("\n\n");
-
-}
-
-extern "C" void EXPORT getG2Correlations_pairwise(char **file_list, int32 file_list_length, double max_time, double bin_width, double pulse_spacing, int64 max_pulse_distance, PyObject *numer, PyObject *denom, bool calc_norm, int32 num_cpu_threads_files, int32 num_cpu_threads_proc, PyObject *channel_1_list, PyObject *channel_2_list, int32 channel_list_length) {
-
-	std::vector<char *> filelist(file_list_length);
-	//Grab filename and stick it into filelist vector
-	for (int32 i = 0; i < file_list_length; i++) {
-		filelist[i] = file_list[i];
-	}
-
-	int64 max_bin = (int64)round(max_time / bin_width);
-	int64 bin_pulse_spacing = (int64)round(pulse_spacing / bin_width);
-
-	std::vector<int32 *> coinc(channel_list_length);
-	for(int channel_list_id  = 0; channel_list_id  < channel_list_length; channel_list_id ++){
-		coinc[channel_list_id] = (int32*)malloc(((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc * sizeof(int32));
-		for (int32 id = 0; id < ((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc; id++) {
-			coinc[channel_list_id][id] = 0;
-		}
-	}
-	int32 blocks_req;
-	if (file_list_length < (num_cpu_threads_files)) {
-		blocks_req = 1;
-	}
-	else if ((file_list_length % (num_cpu_threads_files)) == 0) {
-		blocks_req = file_list_length / (num_cpu_threads_files);
-	}
-	else {
-		blocks_req = file_list_length / (num_cpu_threads_files)+1;
-	}
-
-	printf("Chunking %i files into %i blocks\n", file_list_length, blocks_req);
-	printf("Max Time\tBin Width\tPulse Spacing\tMax Pulse Distance\n");
-	printf("%fus\t%fns\t%fus\t%i\n", max_time * 1e6, bin_width * 1e9, pulse_spacing * 1e6, max_pulse_distance);
-
-	std::vector<std::vector<int32>> denom_counts(channel_list_length,std::vector<int32>(num_cpu_threads_files,0));
-
-	//Processes files in blocks
-	for (int32 block_num = 0; block_num < blocks_req; block_num++) {
-		//Allocate a vector to hold a block of shot_data
-		std::vector<shotData> shot_block(num_cpu_threads_files);
-
-		//Populate the shot_block with data from file
-		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
-
-		//Sort tags and convert them to bins
-		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files);
-
-
-		//Processes files
-		//#pragma omp parallel for num_threads(num_cpu_threads_files)
-		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
-			if ((shot_block)[shot_file_num].file_load_completed) {
-				for(int32 channel_list_id = 0; channel_list_id < channel_list_length; channel_list_id++){
-					calculateNumer_g2_for_channel_pair(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &coinc[channel_list_id][0], shot_file_num, num_cpu_threads_proc, PyLong_AsLong(PyList_GetItem(channel_1_list, channel_list_id)), PyLong_AsLong(PyList_GetItem(channel_2_list, channel_list_id)));
-					if (calc_norm) {
-						calculateDenom_g2_for_channel_pair(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[channel_list_id][shot_file_num]), shot_file_num, PyLong_AsLong(PyList_GetItem(channel_1_list, channel_list_id)), PyLong_AsLong(PyList_GetItem(channel_2_list, channel_list_id)));
-					}
-				}
-			}
-		}
-		printf("Finished block %i of %i\n", block_num + 1, blocks_req);
-
-	}
-
-	//Collapse streamed coincidence counts down to regular numerator and denominator
-	for(int32 channel_list_id = 0; channel_list_id < channel_list_length; channel_list_id++){
-		for (int32 i = 0; i < num_cpu_threads_files; i++) {
-			for (int32 thread = 0; thread < num_cpu_threads_proc; thread++) {
-				for (int32 j = 0; j < (2 * (max_bin)+1); j++) {
-					if (j < (2 * (max_bin)+1)) {
-						PyList_SetItem(numer, j + channel_list_id * (2 * (max_bin)+1), PyLong_FromLong(PyLong_AsLong(PyList_GetItem(numer, j + channel_list_id * (2 * (max_bin)+1))) + coinc[channel_list_id][j + thread * ((2 * (max_bin)+1)) + i * num_cpu_threads_proc * ((2 * (max_bin)+1))]));
-					}
-				}
-			}
-			PyList_SetItem(denom, channel_list_id, PyLong_FromLong(PyLong_AsLong(PyList_GetItem(denom, channel_list_id)) + denom_counts[channel_list_id][i]));
-		}
-	}
-	for(int32 channel_list_id = 0; channel_list_id < channel_list_length; channel_list_id++){
-		free(coinc[channel_list_id]);
-	}
-
-	printf("\n\n");
-
-}
-
-extern "C" void EXPORT getG2Correlations_pairwise_with_rate_calc(char **file_list, int32 file_list_length, double max_time, double bin_width, double pulse_spacing, int64 max_pulse_distance, PyObject *numer, PyObject *denom, bool calc_norm, int32 num_cpu_threads_files, int32 num_cpu_threads_proc, PyObject *corr_channel_1_list, PyObject *corr_channel_2_list, int32 corr_channel_list_length, PyObject *singles_channel_list, int32 singles_channel_list_length) {
-
-	std::vector<char *> filelist(file_list_length);
-	//Grab filename and stick it into filelist vector
-	for (int32 i = 0; i < file_list_length; i++) {
-		filelist[i] = file_list[i];
-	}
-
-	int64 max_bin = (int64)round(max_time / bin_width);
-	int64 bin_pulse_spacing = (int64)round(pulse_spacing / bin_width);
-
+	//Make a coincidence vector the appropriate size
 	std::vector<int32 *> coinc(corr_channel_list_length);
 	for(int channel_list_id  = 0; channel_list_id  < corr_channel_list_length; channel_list_id ++){
 		coinc[channel_list_id] = (int32*)malloc(((2 * (max_bin)+1)) * num_cpu_threads_files * num_cpu_threads_proc * sizeof(int32));
@@ -1505,6 +1229,7 @@ extern "C" void EXPORT getG2Correlations_pairwise_with_rate_calc(char **file_lis
 			coinc[channel_list_id][id] = 0;
 		}
 	}
+	//Figure out how many blocks we need to chunk the files into
 	int32 blocks_req;
 	if (file_list_length < (num_cpu_threads_files)) {
 		blocks_req = 1;
@@ -1516,18 +1241,43 @@ extern "C" void EXPORT getG2Correlations_pairwise_with_rate_calc(char **file_lis
 		blocks_req = file_list_length / (num_cpu_threads_files)+1;
 	}
 
-	//Convert python list to vector, probably unnecessary but it made things easier
-	std::vector<int32> channel_vec(singles_channel_list_length,0);
+	//Get the channel list for the first file
+	std::vector<int16> channel_vec;
+	std::map<int16, int16> channel_map;
+	if(file_list_length > 0){
+		getChannelList(filelist[0], &channel_vec, &channel_map);
+	}
 
-	//Populate channel map
-	for (int16 i = 0; i < singles_channel_list_length; i++) {
-		channel_vec[i] = PyLong_AsLong(PyList_GetItem(singles_channel_list, i));
+	//Convert python channel lists into channel lists the correlations calculations understand
+	std::vector<int16> corr_channel_1_vec(corr_channel_list_length,-1);
+	std::vector<int16> corr_channel_2_vec(corr_channel_list_length,-1);
+	for(int i = 0; i < corr_channel_list_length; i++){
+		PyObject* channel_pair = PyList_GetItem(corr_channel_list,i);
+		//Check if the channels exist in our map
+		if((channel_map.find(PyLong_AsLong(PyList_GetItem(channel_pair, 0))) != channel_map.end()) && (channel_map.find(PyLong_AsLong(PyList_GetItem(channel_pair, 1))) != channel_map.end())){
+			//If both channels exist add them to be calculated
+			corr_channel_1_vec[i] = (channel_map.find(PyLong_AsLong(PyList_GetItem(channel_pair, 0)))->second);
+			corr_channel_2_vec[i] = (channel_map.find(PyLong_AsLong(PyList_GetItem(channel_pair, 1)))->second);
+		}
+		else{
+			printf("Couldn't find %i and %i channel pair\n", PyLong_AsLong(PyList_GetItem(channel_pair, 0)), PyLong_AsLong(PyList_GetItem(channel_pair, 1)));
+		}
+	}
+	
+	//Convert offset pyobject to an offset vector
+	std::vector<int64> offset_vec(channel_vec.size(),0);
+	for(int i = 0; i < PyObject_Length(offset_list); i++){
+		PyObject *offset_pair = PyList_GetItem(offset_list,i);
+		//Lookup channel and put it into offset_vec
+		if(channel_map.find(PyLong_AsLong(PyList_GetItem(offset_pair, 0))) != channel_map.end()){
+			offset_vec[channel_map.find(PyLong_AsLong(PyList_GetItem(offset_pair, 0)))->second] = PyLong_AsLong(PyList_GetItem(offset_pair, 1));
+		}
 	}
 
 	//Vector containing the masked counts and total counts for each channel
-	std::vector<std::vector<int32>> masked_counts(num_cpu_threads_files, std::vector<int32>(singles_channel_list_length,0));
-	std::vector<std::vector<int32>> tot_counts(num_cpu_threads_files, std::vector<int32>(singles_channel_list_length,0));
-	std::vector<std::vector<int32>> masked_block_counts(num_cpu_threads_files, std::vector<int32>(singles_channel_list_length,0));
+	std::vector<std::vector<int32>> masked_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
+	std::vector<std::vector<int32>> tot_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
+	std::vector<std::vector<int32>> masked_block_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
 	//The masked and total time
 	double tot_time = 0;
 	double mask_block_time = 0;
@@ -1547,29 +1297,35 @@ extern "C" void EXPORT getG2Correlations_pairwise_with_rate_calc(char **file_lis
 		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
 
 		//Sort tags and convert them to bins
-		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files);
+		sortAndBinBlock(&shot_block, bin_width, 1, num_cpu_threads_files, &offset_vec);
 
-		//Get the start and stop clock bin
-		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
-			if ((shot_block)[shot_file_num].file_load_completed) {
-				int64 start_tag = ((shot_block[shot_file_num].start_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].start_tags[1] >> 1) & 0x7FFFFFF);
-				int64 end_tag = ((shot_block[shot_file_num].end_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].end_tags[1] >> 1) & 0x7FFFFFF);
-				tot_time += (double)(end_tag-start_tag) * tagger_resolution;
-				mask_block_time += (double)(shot_block[shot_file_num].sorted_clock_tags[0][shot_block[shot_file_num].sorted_clock_tag_pointers[0] - 1] - shot_block[shot_file_num].sorted_clock_tags[1][0]) * tagger_resolution;
+		if(disp_counts){
+			//Get the start and stop clock bin
+			for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
+				if ((shot_block)[shot_file_num].file_load_completed) {
+					int64 start_tag = ((shot_block[shot_file_num].start_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].start_tags[1] >> 1) & 0x7FFFFFF);
+					int64 end_tag = ((shot_block[shot_file_num].end_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].end_tags[1] >> 1) & 0x7FFFFFF);
+					tot_time += (double)(end_tag-start_tag) * tagger_resolution;
+					mask_block_time += (double)(shot_block[shot_file_num].sorted_clock_tags[0][shot_block[shot_file_num].sorted_clock_tag_pointers[0] - 1] - shot_block[shot_file_num].sorted_clock_tags[1][0]) * tagger_resolution;
+				}
 			}
 		}
 
 		//Processes files
-		//#pragma omp parallel for num_threads(num_cpu_threads_files)
+		#pragma omp parallel for num_threads(num_cpu_threads_files)
 		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
 			if ((shot_block)[shot_file_num].file_load_completed) {
 				for(int32 channel_list_id = 0; channel_list_id < corr_channel_list_length; channel_list_id++){
-					calculateNumer_g2_for_channel_pair(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &coinc[channel_list_id][0], shot_file_num, num_cpu_threads_proc, PyLong_AsLong(PyList_GetItem(corr_channel_1_list, channel_list_id)), PyLong_AsLong(PyList_GetItem(corr_channel_2_list, channel_list_id)));
-					if (calc_norm) {
-						calculateDenom_g2_for_channel_pair(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[channel_list_id][shot_file_num]), shot_file_num, PyLong_AsLong(PyList_GetItem(corr_channel_1_list, channel_list_id)), PyLong_AsLong(PyList_GetItem(corr_channel_2_list, channel_list_id)));
+					if((corr_channel_1_vec[channel_list_id] != -1) && (corr_channel_2_vec[channel_list_id] != -1)){
+						calculateNumer_g2_for_channel_pair(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &coinc[channel_list_id][0], shot_file_num, num_cpu_threads_proc, corr_channel_1_vec[channel_list_id], corr_channel_2_vec[channel_list_id]);
+						if (calc_norm) {
+							calculateDenom_g2_for_channel_pair(&(shot_block[shot_file_num]), &max_bin, &bin_pulse_spacing, &max_pulse_distance, &(denom_counts[channel_list_id][shot_file_num]), shot_file_num, corr_channel_1_vec[channel_list_id], corr_channel_2_vec[channel_list_id]);
+						}
 					}
 				}
-				countTags(&(shot_block[shot_file_num]), &(tot_counts[shot_file_num]), &(masked_counts[shot_file_num]), &(masked_block_counts[shot_file_num]), &channel_vec);
+				if(disp_counts){
+					countTags(&(shot_block[shot_file_num]), &(tot_counts[shot_file_num]), &(masked_counts[shot_file_num]), &(masked_block_counts[shot_file_num]), &channel_vec);
+				}
 			}
 		}
 		printf("Finished block %i of %i\n", block_num + 1, blocks_req);
@@ -1592,36 +1348,37 @@ extern "C" void EXPORT getG2Correlations_pairwise_with_rate_calc(char **file_lis
 	for(int32 channel_list_id = 0; channel_list_id < corr_channel_list_length; channel_list_id++){
 		free(coinc[channel_list_id]);
 	}
-
-	//Collapse the counts down
-	std::vector<int32> tot_counts_collapse(singles_channel_list_length,0);
-	std::vector<int32> masked_counts_collapse(singles_channel_list_length,0);
-	std::vector<int32> masked_block_counts_collapse(singles_channel_list_length,0);
-	for(int channel = 0; channel < singles_channel_list_length; channel++){
-		for (int32 shot_file_num = 0; shot_file_num < (num_cpu_threads_files); shot_file_num++){
-			tot_counts_collapse[channel] += tot_counts[shot_file_num][channel];
-			masked_counts_collapse[channel] += masked_counts[shot_file_num][channel];
-			masked_block_counts_collapse[channel] += masked_block_counts[shot_file_num][channel];
+	if(disp_counts){
+		//Collapse the counts down
+		std::vector<int32> tot_counts_collapse(channel_vec.size(),0);
+		std::vector<int32> masked_counts_collapse(channel_vec.size(),0);
+		std::vector<int32> masked_block_counts_collapse(channel_vec.size(),0);
+		for(int channel = 0; channel < channel_vec.size(); channel++){
+			for (int32 shot_file_num = 0; shot_file_num < (num_cpu_threads_files); shot_file_num++){
+				tot_counts_collapse[channel] += tot_counts[shot_file_num][channel];
+				masked_counts_collapse[channel] += masked_counts[shot_file_num][channel];
+				masked_block_counts_collapse[channel] += masked_block_counts[shot_file_num][channel];
+			}
 		}
-	}
 
-	printf("Tot time\tMasked block time\n");
-	printf("%f\t%f\n",tot_time, mask_block_time);
-	printf("Count info:\n");
-	for(int i = 0; i < singles_channel_list_length; i++){
-		printf("Channel %i:\n", PyLong_AsLong(PyList_GetItem(singles_channel_list, i)));
-		printf("Singles Counts:\n");
-		printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
-		printf("%i\t\t%i\t\t%i\t\t%i\n", tot_counts_collapse[i], masked_counts_collapse[i], masked_block_counts_collapse[i] - masked_counts_collapse[i], tot_counts_collapse[i] - masked_block_counts_collapse[i]);
-		printf("Rates (s^-1):\n");
-		printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
-		printf("%.1f\t\t%.1f\t\t%.1f\t\t%.1f\n", ((double)tot_counts_collapse[i]) / tot_time, ((double)masked_counts_collapse[i]) / mask_block_time, (double)(masked_block_counts_collapse[i] - masked_counts_collapse[i]) / (mask_block_time), (double)(tot_counts_collapse[i] - masked_block_counts_collapse[i]) / (tot_time - mask_block_time));
+		printf("Tot time\tMasked block time\n");
+		printf("%f\t%f\n",tot_time, mask_block_time);
+		printf("Count info:\n");
+		for(int i = 0; i < channel_vec.size(); i++){
+			printf("Channel %i:\n", channel_vec[i]);
+			printf("Singles Counts:\n");
+			printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
+			printf("%i\t\t%i\t\t%i\t\t%i\n", tot_counts_collapse[i], masked_counts_collapse[i], masked_block_counts_collapse[i] - masked_counts_collapse[i], tot_counts_collapse[i] - masked_block_counts_collapse[i]);
+			printf("Rates (s^-1):\n");
+			printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
+			printf("%.1f\t\t%.1f\t\t%.1f\t\t%.1f\n", ((double)tot_counts_collapse[i]) / tot_time, ((double)masked_counts_collapse[i]) / mask_block_time, (double)(masked_block_counts_collapse[i] - masked_counts_collapse[i]) / (mask_block_time), (double)(tot_counts_collapse[i] - masked_block_counts_collapse[i]) / (tot_time - mask_block_time));
+		}
 	}
 	printf("\n\n");
 
 }
 
-extern "C" void EXPORT getCounts(char **file_list, int32 file_list_length, PyObject *channel_list, int32 channel_list_length, int32 num_cpu_threads_files){
+extern "C" void EXPORT getCounts(char **file_list, int32 file_list_length, int32 num_cpu_threads_files){
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
 	for (int32 i = 0; i < file_list_length; i++) {
@@ -1639,19 +1396,20 @@ extern "C" void EXPORT getCounts(char **file_list, int32 file_list_length, PyObj
 		blocks_req = file_list_length / (num_cpu_threads_files)+1;
 	}
 
-	//Convert python list to vector, probably unnecessary but it made things easier
-	std::vector<int32> channel_vec(channel_list_length,0);
-
-	//Populate channel map
-	for (int16 i = 0; i < channel_list_length; i++) {
-		channel_vec[i] = PyLong_AsLong(PyList_GetItem(channel_list, i));
+	//Get the channel list for the first file
+	std::vector<int16> channel_vec;
+	std::map<int16, int16> channel_map;
+	if(file_list_length > 0){
+		getChannelList(filelist[0], &channel_vec, &channel_map);
 	}
 	printf("Chunking %i files into %i blocks\n", file_list_length, blocks_req);
 
+	std::vector<int64> offset_vec(channel_vec.size(),0);
+
 	//Vector containing the masked counts and total counts for each channel
-	std::vector<std::vector<int32>> masked_counts(num_cpu_threads_files, std::vector<int32>(channel_list_length,0));
-	std::vector<std::vector<int32>> tot_counts(num_cpu_threads_files, std::vector<int32>(channel_list_length,0));
-	std::vector<std::vector<int32>> masked_block_counts(num_cpu_threads_files, std::vector<int32>(channel_list_length,0));
+	std::vector<std::vector<int32>> masked_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
+	std::vector<std::vector<int32>> tot_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
+	std::vector<std::vector<int32>> masked_block_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
 	//The masked and total time
 	double tot_time = 0;
 	double mask_block_time = 0;
@@ -1663,7 +1421,7 @@ extern "C" void EXPORT getCounts(char **file_list, int32 file_list_length, PyObj
 		//Populate the shot_block with data from file
 		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
 		//Sort tags and convert them to bins
-		sortAndBinBlock(&shot_block, tagger_resolution * 2, 1, num_cpu_threads_files);
+		sortAndBinBlock(&shot_block, tagger_resolution * 2, 1, num_cpu_threads_files, &offset_vec);
 		//For each file figure out the masked and total counts
 		#pragma omp parallel for
 		for (int32 shot_file_num = 0; shot_file_num < (num_cpu_threads_files); shot_file_num++) {
@@ -1683,10 +1441,10 @@ extern "C" void EXPORT getCounts(char **file_list, int32 file_list_length, PyObj
 		printf("Finished block %i of %i\n", block_num + 1, blocks_req);
 	}
 	//Collapse the counts down
-	std::vector<int32> tot_counts_collapse(channel_list_length,0);
-	std::vector<int32> masked_counts_collapse(channel_list_length,0);
-	std::vector<int32> masked_block_counts_collapse(channel_list_length,0);
-	for(int channel = 0; channel < channel_list_length; channel++){
+	std::vector<int32> tot_counts_collapse(channel_vec.size(),0);
+	std::vector<int32> masked_counts_collapse(channel_vec.size(),0);
+	std::vector<int32> masked_block_counts_collapse(channel_vec.size(),0);
+	for(int channel = 0; channel < channel_vec.size(); channel++){
 		for (int32 shot_file_num = 0; shot_file_num < (num_cpu_threads_files); shot_file_num++){
 			tot_counts_collapse[channel] += tot_counts[shot_file_num][channel];
 			masked_counts_collapse[channel] += masked_counts[shot_file_num][channel];
@@ -1697,8 +1455,8 @@ extern "C" void EXPORT getCounts(char **file_list, int32 file_list_length, PyObj
 	printf("Tot time\tMasked block time\n");
 	printf("%f\t%f\n",tot_time, mask_block_time);
 	printf("Count info:\n");
-	for(int i = 0; i < channel_list_length; i++){
-		printf("Channel %i:\n", PyLong_AsLong(PyList_GetItem(channel_list, i)));
+	for(int i = 0; i < channel_vec.size(); i++){
+		printf("Channel %i:\n", channel_vec[i]);
 		printf("Singles Counts:\n");
 		printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
 		printf("%i\t\t%i\t\t%i\t\t%i\n", tot_counts_collapse[i], masked_counts_collapse[i], masked_block_counts_collapse[i] - masked_counts_collapse[i], tot_counts_collapse[i] - masked_block_counts_collapse[i]);
@@ -1709,4 +1467,36 @@ extern "C" void EXPORT getCounts(char **file_list, int32 file_list_length, PyObj
 
 	printf("\n\n");
 
+}
+
+extern "C" void EXPORT testChannels(char **file_list, int32 file_list_length){
+	std::vector<char *> filelist(file_list_length);
+	//Grab filename and stick it into filelist vector
+	for (int32 i = 0; i < file_list_length; i++) {
+		filelist[i] = file_list[i];
+	}
+	std::vector<int16> channel_list;
+	std::map<int16, int16> channel_map;
+	getChannelList(filelist[0], &channel_list, &channel_map);
+	for(int i = 0; i < channel_list.size(); i++){
+		printf("%i\n", channel_list[i]);
+	}
+
+	if(channel_map.find(5) != channel_map.end()){
+		printf("%i\n", channel_map.find(5)->second);
+	}
+	else{
+		printf("Not found\n");
+	}
+}
+
+extern "C" void EXPORT test2D(PyObject *test){
+	printf("%i\n", PyObject_Length(test));
+	for(int i = 0; i < PyObject_Length(test); i++){
+		PyObject *slice = PyList_GetItem(test,i);
+		for(int j = 0; j < PyObject_Length(slice); j++){
+			printf("%i\t", PyLong_AsLong(PyList_GetItem(slice, j)));
+		}
+		printf("\n");
+	}
 }

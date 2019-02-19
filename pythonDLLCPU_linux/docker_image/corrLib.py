@@ -91,7 +91,7 @@ def g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing
         except:
             print("Could not update values")
     else:
-        output_dict = {'numer_g2':np.reshape(np.array(numer_list),(len(pairwise_channel_list),len(tau))),'denom_g2':denom_list,'tau':tau,'file_list':dir_file_list}
+        output_dict = {'numer_g2':np.reshape(np.array(numer_list),(len(pairwise_channel_list),len(tau))),'denom_g2':denom_list,'tau':tau,'file_list':dir_file_list, 'pairwise_channel_list': pairwise_channel_list}
     return output_dict
 
 def g3ToDict_tripwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm=True,update=False,disp_counts=False,tripwise_channel_list=[[3,5,8]],offset_list=[[3,0],[5,0],[8,0]]):
@@ -164,7 +164,7 @@ def g3ToDict_tripwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing
         except:
             print("Could not update values")
     else:
-        output_dict = {'numer_g3':np.array(numer_list).reshape(len(tripwise_channel_list),len(tau),len(tau)),'denom_g3':denom_list,'tau':tau,'file_list':dir_file_list}
+        output_dict = {'numer_g3':np.array(numer_list).reshape(len(tripwise_channel_list),len(tau),len(tau)),'denom_g3':denom_list,'tau':tau,'file_list':dir_file_list, 'tripwise_channel_list': tripwise_channel_list}
     return output_dict
 
 def g2ToFile_pulse(folder_name, file_out_name, min_tau_1, max_tau_1, min_tau_2, max_tau_2, bin_width):

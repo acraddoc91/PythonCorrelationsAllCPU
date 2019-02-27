@@ -4,7 +4,6 @@ import multiprocessing
 import os
 import numpy as np
 import scipy.io
-#import wurlitzer
 import time
 
 tagger_resolution = 82.3e-12*2
@@ -74,7 +73,7 @@ def g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing
     start_time = time.time()
     #Call the DLL
     lib.getG2Correlations_pairwise(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,int(num_cpu/2),int(num_cpu/2),pairwise_channel_list, disp_counts, offset_list)
-    print("Finished in " + str(time.time()-start_time) + "s")
+    print("Finished g2 in " + str(time.time()-start_time) + "s")
     
     time.sleep(1)
     #This is required in Windows as otherwise the DLL can't be re-used without rebooting the computer
@@ -147,7 +146,7 @@ def g3ToDict_tripwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing
     start_time = time.time()
     #Call the DLL
     lib.getG3Correlations_tripletwise(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,int(num_cpu/2),int(num_cpu/2), tripwise_channel_list, disp_counts, offset_list)
-    print("Finished in " + str(time.time()-start_time) + "s")
+    print("Finished g3 in " + str(time.time()-start_time) + "s")
     time.sleep(1)
     #This is required in Windows as otherwise the DLL can't be re-used without rebooting the computer
     if os.name == 'nt':

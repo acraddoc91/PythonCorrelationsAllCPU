@@ -1,7 +1,7 @@
-From python:3.6.7-stretch
+FROM python:3.6.7-stretch
 
 RUN apt-get update
-RUN pip install numpy scipy jupyter
+RUN pip install numpy scipy jupyter wurlitzer
 RUN apt-get install -y libhdf5-cpp-100 cifs-utils
 RUN mkdir /NAS
 RUN mkdir /home/rbry

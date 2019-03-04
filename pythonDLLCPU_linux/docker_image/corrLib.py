@@ -20,7 +20,7 @@ def file_list_to_ctypes(file_list,folder):
         str_array[i] = (folder+file).encode('utf-8')
     return str_array
 
-def g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm=True,update=False,disp_counts=False,pairwise_channel_list=[[3,5]],offset_list=[[3,0],[5,0],[8,0]]):
+def g2ToDict_pairwise(dir_file_list,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm=True,update=False,disp_counts=False,pairwise_channel_list=[[3,5]],offset_list=[[3,0],[5,0],[8,0]]):
     
     #Convert various parameters to their integer values for the DLL
     int_bin_width = round(bin_width / tagger_resolution) * tagger_resolution
@@ -32,8 +32,6 @@ def g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing
     #Calculate what tau should look like
     tau = np.arange(-max_bin,max_bin+1) * int_bin_width
     
-    #Get list of files to process from the data folder
-    dir_file_list = os.listdir(folder_name)
     #Previous values to add to new calculated total
     old_denom = []
     old_numer = []
@@ -93,7 +91,7 @@ def g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing
         output_dict = {'numer_g2':np.reshape(np.array(numer_list),(len(pairwise_channel_list),len(tau))),'denom_g2':denom_list,'tau':tau,'file_list':dir_file_list, 'pairwise_channel_list': pairwise_channel_list}
     return output_dict
 
-def g3ToDict_tripwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm=True,update=False,disp_counts=False,tripwise_channel_list=[[3,5,8]],offset_list=[[3,0],[5,0],[8,0]]):
+def g3ToDict_tripwise(dir_file_list,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm=True,update=False,disp_counts=False,tripwise_channel_list=[[3,5,8]],offset_list=[[3,0],[5,0],[8,0]]):
     #Convert various parameters to their integer values for the DLL
     int_bin_width = round(bin_width / tagger_resolution) * tagger_resolution
     int_max_time = round(max_time / int_bin_width) * int_bin_width
@@ -104,8 +102,6 @@ def g3ToDict_tripwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing
     #Calculate what tau should look like
     tau = np.arange(-max_bin,max_bin+1) * int_bin_width
 
-    #Get list of files to process from the data folder
-    dir_file_list = os.listdir(folder_name)
     #Previous values to add to new calculated total
     old_denom = []
     old_numer = []
@@ -204,16 +200,19 @@ def g2ToFile_pulse(folder_name, file_out_name, min_tau_1, max_tau_1, min_tau_2, 
     
 def processFiles(g2_proccessing,g3_proccessing,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts=False,pairwise_channel_list=[[3,5]],triplewise_channel_list=[[3,5,8]],offset_list=[[3,0],[5,0],[8,0]]):
     dict = {}
+    #Get list of files to process from the data folder
+    dir_file_list = os.listdir(folder_name)
+
     if g2_proccessing:
         if g3_proccessing:
-            g2_dict = g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,False,pairwise_channel_list,offset_list)
+            g2_dict = g2ToDict_pairwise(dir_file_list,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,False,pairwise_channel_list,offset_list)
             dict = {**dict, **g2_dict}
         else:
-            g2_dict = g2ToDict_pairwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts,pairwise_channel_list,offset_list)
+            g2_dict = g2ToDict_pairwise(dir_file_list,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts,pairwise_channel_list,offset_list)
             dict = {**dict, **g2_dict}
     if g3_proccessing:
         #g3_dict = g3ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update)
-        g3_dict = g3ToDict_tripwise(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts,triplewise_channel_list,offset_list)
+        g3_dict = g3ToDict_tripwise(dir_file_list,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts,triplewise_channel_list,offset_list)
         dict = {**dict, **g3_dict}
     scipy.io.savemat(file_out_name,dict)
 

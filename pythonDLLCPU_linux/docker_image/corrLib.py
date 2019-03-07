@@ -70,7 +70,7 @@ def g2ToDict_pairwise(dir_file_list,folder_name,file_out_name,max_time,bin_width
     lib.getG2Correlations_pairwise.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.py_object, ctypes.c_bool, ctypes.py_object]
     start_time = time.time()
     #Call the DLL
-    lib.getG2Correlations_pairwise(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,int(num_cpu/2),int(num_cpu/2),pairwise_channel_list, disp_counts, offset_list)
+    lib.getG2Correlations_pairwise(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,int(num_cpu),int(num_cpu),pairwise_channel_list, disp_counts, offset_list)
     print("Finished g2 in " + str(time.time()-start_time) + "s")
     
     time.sleep(1)
@@ -141,7 +141,7 @@ def g3ToDict_tripwise(dir_file_list,folder_name,file_out_name,max_time,bin_width
     lib.getG3Correlations_tripletwise.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int, ctypes.c_int,ctypes.c_int, ctypes.py_object, ctypes.c_bool, ctypes.py_object]
     start_time = time.time()
     #Call the DLL
-    lib.getG3Correlations_tripletwise(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,int(num_cpu/2),int(num_cpu/2), tripwise_channel_list, disp_counts, offset_list)
+    lib.getG3Correlations_tripletwise(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,int(num_cpu),int(num_cpu), tripwise_channel_list, disp_counts, offset_list)
     print("Finished g3 in " + str(time.time()-start_time) + "s")
     time.sleep(1)
     #This is required in Windows as otherwise the DLL can't be re-used without rebooting the computer

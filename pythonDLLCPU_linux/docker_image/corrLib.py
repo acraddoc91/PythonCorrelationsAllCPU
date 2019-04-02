@@ -5,9 +5,23 @@ import os
 import numpy as np
 import scipy.io
 import time
+import psutil
 
 tagger_resolution = 82.3e-12*2
-num_cpu = multiprocessing.cpu_count()
+#num_cpu = multiprocessing.cpu_count()
+
+def max_threads_allowed(array_size_list, bit_size):
+    num_cpu = multiprocessing.cpu_count()
+    available_memory = psutil.virtual_memory().available
+    
+    size_in_memory = bit_size/4
+    for array_dim_size in array_size_list:
+        size_in_memory *= array_dim_size
+    
+    max_num_arrays_from_memory = int(np.floor(available_memory/size_in_memory))
+    max_threads = min(num_cpu,max_num_arrays_from_memory)
+
+    return max_threads
 
 working_directory = "/usr/local/lib"
 lib_name = 'pythonDLLCPU.so'
@@ -63,33 +77,39 @@ def g2ToDict_pairwise(dir_file_list,folder_name,file_out_name,max_time,bin_width
         file_list = dir_file_list
     
     num_files = len(file_list)
-    #Convert things to C versions for the DLL
-    ctypes_file_list = file_list_to_ctypes(file_list, folder_name)
-    #Setup the DLL
-    lib = ctypes.CDLL(working_directory + '/' + lib_name)
-    lib.getG2Correlations_pairwise.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.py_object, ctypes.c_bool, ctypes.py_object]
-    start_time = time.time()
-    #Call the DLL
-    lib.getG2Correlations_pairwise(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,int(num_cpu),int(num_cpu),pairwise_channel_list, disp_counts, offset_list)
-    print("Finished g2 in " + str(time.time()-start_time) + "s")
-    
-    time.sleep(1)
-    #This is required in Windows as otherwise the DLL can't be re-used without rebooting the computer
-    if os.name == 'nt':
-        _ctypes.FreeLibrary(lib._handle)
+
+    max_threads = max_threads_allowed([len(numer_list)],32)
+    if max_threads > 0:
+
+        #Convert things to C versions for the DLL
+        ctypes_file_list = file_list_to_ctypes(file_list, folder_name)
+        #Setup the DLL
+        lib = ctypes.CDLL(working_directory + '/' + lib_name)
+        lib.getG2Correlations_pairwise.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.py_object, ctypes.c_bool, ctypes.py_object]
+        start_time = time.time()
+        #Call the DLL
+        lib.getG2Correlations_pairwise(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,max_threads,1,pairwise_channel_list, disp_counts, offset_list)
+        print("Finished g2 in " + str(time.time()-start_time) + "s")
+        
+        time.sleep(1)
+        #This is required in Windows as otherwise the DLL can't be re-used without rebooting the computer
+        if os.name == 'nt':
+            _ctypes.FreeLibrary(lib._handle)
+        else:
+            _ctypes.dlclose(lib._handle)
+        #Check if we have old values to update
+        output_dict = {}
+        if updating:
+            try:
+                #Try and add the newly calculated values to the old ones may fuck up if you ask for numerators of different sizes
+                output_dict = {'numer_g2':np.reshape(np.array(numer_list),(len(pairwise_channel_list),len(tau)))+old_numer,'denom_g2':denom_list+old_denom,'tau':tau,'file_list':dir_file_list}
+            except:
+                print("Could not update values")
+        else:
+            output_dict = {'numer_g2':np.reshape(np.array(numer_list),(len(pairwise_channel_list),len(tau))),'denom_g2':denom_list,'tau':tau,'file_list':dir_file_list, 'pairwise_channel_list': pairwise_channel_list}
+        return output_dict
     else:
-        _ctypes.dlclose(lib._handle)
-    #Check if we have old values to update
-    output_dict = {}
-    if updating:
-        try:
-            #Try and add the newly calculated values to the old ones may fuck up if you ask for numerators of different sizes
-            output_dict = {'numer_g2':np.reshape(np.array(numer_list),(len(pairwise_channel_list),len(tau)))+old_numer,'denom_g2':denom_list+old_denom,'tau':tau,'file_list':dir_file_list}
-        except:
-            print("Could not update values")
-    else:
-        output_dict = {'numer_g2':np.reshape(np.array(numer_list),(len(pairwise_channel_list),len(tau))),'denom_g2':denom_list,'tau':tau,'file_list':dir_file_list, 'pairwise_channel_list': pairwise_channel_list}
-    return output_dict
+        return 1
 
 def g3ToDict_tripwise(dir_file_list,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm=True,update=False,disp_counts=False,tripwise_channel_list=[[3,5,8]],offset_list=[[3,0],[5,0],[8,0]]):
     #Convert various parameters to their integer values for the DLL
@@ -133,34 +153,40 @@ def g3ToDict_tripwise(dir_file_list,folder_name,file_out_name,max_time,bin_width
 
     num_files = len(file_list)
     
-    #Convert things to C versions for the DLL
-    denom_ctypes = ctypes.c_int(0)
-    ctypes_file_list = file_list_to_ctypes(file_list, folder_name)
-    #Setup the DLL
-    lib = ctypes.CDLL(working_directory + '/' + lib_name)
-    lib.getG3Correlations_tripletwise.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int, ctypes.c_int,ctypes.c_int, ctypes.py_object, ctypes.c_bool, ctypes.py_object]
-    start_time = time.time()
-    #Call the DLL
-    lib.getG3Correlations_tripletwise(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,int(num_cpu),int(num_cpu), tripwise_channel_list, disp_counts, offset_list)
-    print("Finished g3 in " + str(time.time()-start_time) + "s")
-    time.sleep(1)
-    #This is required in Windows as otherwise the DLL can't be re-used without rebooting the computer
-    if os.name == 'nt':
-        _ctypes.FreeLibrary(lib._handle)
-    else:
-        _ctypes.dlclose(lib._handle)
+    max_threads = max_threads_allowed([len(numer_list)],32)
+    if max_threads > 0:
 
-    #Check if we have old values to update
-    output_dict = {}
-    if updating:
-        try:
-            #Try and add the newly calculated values to the old ones may fuck up if you ask for numerators of different sizes
-            output_dict = {'numer_g3':np.array(numer_list).reshape(len(tripwise_channel_list),len(tau),len(tau))+old_numer,'denom_g3':denom_list +old_denom,'tau':tau,'file_list':dir_file_list}
-        except:
-            print("Could not update values")
+        #Convert things to C versions for the DLL
+        denom_ctypes = ctypes.c_int(0)
+        ctypes_file_list = file_list_to_ctypes(file_list, folder_name)
+        #Setup the DLL
+        lib = ctypes.CDLL(working_directory + '/' + lib_name)
+        lib.getG3Correlations_tripletwise.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_double, ctypes.c_double, ctypes.c_double, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.c_int, ctypes.c_int,ctypes.c_int, ctypes.py_object, ctypes.c_bool, ctypes.py_object]
+        start_time = time.time()
+        #Call the DLL
+        lib.getG3Correlations_tripletwise(ctypes_file_list, num_files, int_max_time, int_bin_width, int_pulse_spacing, max_pulse_distance, numer_list, denom_list,calc_norm,max_threads,1, tripwise_channel_list, disp_counts, offset_list)
+        print("Finished g3 in " + str(time.time()-start_time) + "s")
+        time.sleep(1)
+        #This is required in Windows as otherwise the DLL can't be re-used without rebooting the computer
+        if os.name == 'nt':
+            _ctypes.FreeLibrary(lib._handle)
+        else:
+            _ctypes.dlclose(lib._handle)
+
+        #Check if we have old values to update
+        output_dict = {}
+        if updating:
+            try:
+                #Try and add the newly calculated values to the old ones may fuck up if you ask for numerators of different sizes
+                output_dict = {'numer_g3':np.array(numer_list).reshape(len(tripwise_channel_list),len(tau),len(tau))+old_numer,'denom_g3':denom_list +old_denom,'tau':tau,'file_list':dir_file_list}
+            except:
+                print("Could not update values")
+        else:
+            output_dict = {'numer_g3':np.array(numer_list).reshape(len(tripwise_channel_list),len(tau),len(tau)),'denom_g3':denom_list,'tau':tau,'file_list':dir_file_list, 'tripwise_channel_list': tripwise_channel_list}
+        return output_dict
     else:
-        output_dict = {'numer_g3':np.array(numer_list).reshape(len(tripwise_channel_list),len(tau),len(tau)),'denom_g3':denom_list,'tau':tau,'file_list':dir_file_list, 'tripwise_channel_list': tripwise_channel_list}
-    return output_dict
+        print("Couldn't start enough threads to run g3, too little memory or too few CPU available")
+        return 1
 
 def g2ToFile_pulse(folder_name, file_out_name, min_tau_1, max_tau_1, min_tau_2, max_tau_2, bin_width):
     file_list = os.listdir(folder_name)
@@ -203,18 +229,33 @@ def processFiles(g2_proccessing,g3_proccessing,folder_name,file_out_name,max_tim
     #Get list of files to process from the data folder
     dir_file_list = os.listdir(folder_name)
 
+    #Keep track of whether we can save the dict
+    good_to_save = True
     if g2_proccessing:
         if g3_proccessing:
             g2_dict = g2ToDict_pairwise(dir_file_list,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,False,pairwise_channel_list,offset_list)
-            dict = {**dict, **g2_dict}
+            #Check if the g2 processing completed or failed because of a memory or CPU error
+            if g2_dict != 1:
+                dict = {**dict, **g2_dict}
+            else:
+                good_to_save = False
         else:
             g2_dict = g2ToDict_pairwise(dir_file_list,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts,pairwise_channel_list,offset_list)
-            dict = {**dict, **g2_dict}
+            #Check if the g2 processing completed or failed because of a memory or CPU error
+            if g2_dict != 1:
+                dict = {**dict, **g2_dict}
+            else:
+                good_to_save = False
     if g3_proccessing:
-        #g3_dict = g3ToDict(folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update)
         g3_dict = g3ToDict_tripwise(dir_file_list,folder_name,file_out_name,max_time,bin_width,pulse_spacing,max_pulse_distance,calc_norm,update,disp_counts,triplewise_channel_list,offset_list)
-        dict = {**dict, **g3_dict}
-    scipy.io.savemat(file_out_name,dict)
+        #Check if the g3 processing completed or failed because of a memory or CPU error
+        if g3_dict != 1:
+            dict = {**dict, **g3_dict}
+        else:
+                good_to_save = False
+    #Only save if it's safe too
+    if good_to_save:
+        scipy.io.savemat(file_out_name,dict)
 
 def countTags(folder_name):
     file_list = os.listdir(folder_name)

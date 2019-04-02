@@ -1469,34 +1469,106 @@ extern "C" void EXPORT getCounts(char **file_list, int32 file_list_length, int32
 
 }
 
-extern "C" void EXPORT testChannels(char **file_list, int32 file_list_length){
+extern "C" void EXPORT getCounts_and_return(char **file_list, int32 file_list_length, int32 num_cpu_threads_files, PyObject *channel_list, PyObject *masked_counts_back, PyObject *tot_counts_back, PyObject *masked_block_counts_back, double *tot_time_back, double *masked_block_time_back){
 	std::vector<char *> filelist(file_list_length);
 	//Grab filename and stick it into filelist vector
 	for (int32 i = 0; i < file_list_length; i++) {
 		filelist[i] = file_list[i];
 	}
-	std::vector<int16> channel_list;
-	std::map<int16, int16> channel_map;
-	getChannelList(filelist[0], &channel_list, &channel_map);
-	for(int i = 0; i < channel_list.size(); i++){
-		printf("%i\n", channel_list[i]);
+	//Figure out how many blocks are required
+	int32 blocks_req;
+	if (file_list_length < (num_cpu_threads_files)) {
+		blocks_req = 1;
+	}
+	else if ((file_list_length % (num_cpu_threads_files)) == 0) {
+		blocks_req = file_list_length / (num_cpu_threads_files);
+	}
+	else {
+		blocks_req = file_list_length / (num_cpu_threads_files)+1;
 	}
 
-	if(channel_map.find(5) != channel_map.end()){
-		printf("%i\n", channel_map.find(5)->second);
-	}
-	else{
-		printf("Not found\n");
-	}
-}
 
-extern "C" void EXPORT test2D(PyObject *test){
-	printf("%i\n", PyObject_Length(test));
-	for(int i = 0; i < PyObject_Length(test); i++){
-		PyObject *slice = PyList_GetItem(test,i);
-		for(int j = 0; j < PyObject_Length(slice); j++){
-			printf("%i\t", PyLong_AsLong(PyList_GetItem(slice, j)));
+	//Get the channel list for the first file
+	std::vector<int16> channel_vec;
+	//std::map<int16, int16> channel_map;
+	//#if(file_list_length > 0){
+	//	getChannelList(filelist[0], &channel_vec, &channel_map);
+	//}
+	channel_vec.resize(PyObject_Length(channel_list));
+	for(int i = 0; i < PyObject_Length(channel_list); i++){
+		channel_vec[i] = PyLong_AsLong(PyList_GetItem(channel_list, i));
+	}
+	printf("Chunking %i files into %i blocks\n", file_list_length, blocks_req);
+
+	std::vector<int64> offset_vec(channel_vec.size(),0);
+
+	//Vector containing the masked counts and total counts for each channel
+	std::vector<std::vector<int32>> masked_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
+	std::vector<std::vector<int32>> tot_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
+	std::vector<std::vector<int32>> masked_block_counts(num_cpu_threads_files, std::vector<int32>(channel_vec.size(),0));
+	//The masked and total time
+	double tot_time = 0;
+	double mask_block_time = 0;
+	//Processes files in blocks
+	for (int32 block_num = 0; block_num < blocks_req; block_num++) {
+		//Allocate a vector to hold a block of shot_data
+		std::vector<shotData> shot_block(num_cpu_threads_files);
+
+		//Populate the shot_block with data from file
+		populateBlock(&shot_block, &filelist, block_num, 1, num_cpu_threads_files);
+		//Sort tags and convert them to bins
+		sortAndBinBlock(&shot_block, tagger_resolution * 2, 1, num_cpu_threads_files, &offset_vec);
+		//For each file figure out the masked and total counts
+		#pragma omp parallel for
+		for (int32 shot_file_num = 0; shot_file_num < (num_cpu_threads_files); shot_file_num++) {
+			if ((shot_block)[shot_file_num].file_load_completed) {
+				countTags(&(shot_block[shot_file_num]), &(tot_counts[shot_file_num]), &(masked_counts[shot_file_num]), &(masked_block_counts[shot_file_num]), &channel_vec);
+			}
 		}
-		printf("\n");
+		//Get the start and stop clock bin
+		for (int32 shot_file_num = 0; shot_file_num < num_cpu_threads_files; shot_file_num++) {
+			if ((shot_block)[shot_file_num].file_load_completed) {
+				int64 start_tag = ((shot_block[shot_file_num].start_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].start_tags[1] >> 1) & 0x7FFFFFF);
+				int64 end_tag = ((shot_block[shot_file_num].end_tags[0] >> 1) << 27) + ((shot_block[shot_file_num].end_tags[1] >> 1) & 0x7FFFFFF);
+				tot_time += (double)(end_tag-start_tag) * tagger_resolution;
+				mask_block_time += (double)(shot_block[shot_file_num].sorted_clock_tags[0][shot_block[shot_file_num].sorted_clock_tag_pointers[0] - 1] - shot_block[shot_file_num].sorted_clock_tags[1][0]) * tagger_resolution;
+			}
+		}
+		printf("Finished block %i of %i\n", block_num + 1, blocks_req);
 	}
+	//Collapse the counts down
+	std::vector<int32> tot_counts_collapse(channel_vec.size(),0);
+	std::vector<int32> masked_counts_collapse(channel_vec.size(),0);
+	std::vector<int32> masked_block_counts_collapse(channel_vec.size(),0);
+	for(int channel = 0; channel < channel_vec.size(); channel++){
+		for (int32 shot_file_num = 0; shot_file_num < (num_cpu_threads_files); shot_file_num++){
+			tot_counts_collapse[channel] += tot_counts[shot_file_num][channel];
+			masked_counts_collapse[channel] += masked_counts[shot_file_num][channel];
+			masked_block_counts_collapse[channel] += masked_block_counts[shot_file_num][channel];
+		}
+	}
+
+	/*printf("Tot time\tMasked block time\n");
+	printf("%f\t%f\n",tot_time, mask_block_time);
+	printf("Count info:\n");
+	for(int i = 0; i < channel_vec.size(); i++){
+		printf("Channel %i:\n", channel_vec[i]);
+		printf("Singles Counts:\n");
+		printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
+		printf("%i\t\t%i\t\t%i\t\t%i\n", tot_counts_collapse[i], masked_counts_collapse[i], masked_block_counts_collapse[i] - masked_counts_collapse[i], tot_counts_collapse[i] - masked_block_counts_collapse[i]);
+		printf("Rates (s^-1):\n");
+		printf("Tot\t\tMasked\t\tUnmasked block\tUnmasked non-block\n");
+		printf("%.1f\t\t%.1f\t\t%.1f\t\t%.1f\n", ((double)tot_counts_collapse[i]) / tot_time, ((double)masked_counts_collapse[i]) / mask_block_time, (double)(masked_block_counts_collapse[i] - masked_counts_collapse[i]) / (mask_block_time), (double)(tot_counts_collapse[i] - masked_block_counts_collapse[i]) / (tot_time - mask_block_time));
+	}*/
+
+	*tot_time_back = tot_time;
+	*masked_block_time_back = mask_block_time;
+	for(int i = 0; i < channel_vec.size(); i++){
+		PyList_SetItem(tot_counts_back, i, PyLong_FromLong(tot_counts_collapse[i]));
+		PyList_SetItem(masked_counts_back, i, PyLong_FromLong(masked_counts_collapse[i]));
+		PyList_SetItem(masked_block_counts_back, i, PyLong_FromLong(masked_block_counts_collapse[i]));
+	}
+
+	printf("\n\n");
+
 }

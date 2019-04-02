@@ -226,3 +226,22 @@ def countTags(folder_name):
     lib.getCounts(ctypes_file_list, num_files,16)
     print("Finished in " + str(time.time()-start_time) + "s")
     time.sleep(1)
+
+def countTags_and_return(folder_name):
+    file_list = os.listdir(folder_name)
+    num_files = len(file_list)
+    ctypes_file_list = file_list_to_ctypes(file_list, folder_name)
+    lib = ctypes.CDLL(working_directory + '/' + lib_name)
+    channel_list = [3,5,8]
+    tot_time = ctypes.c_double(0)
+    mask_time = ctypes.c_double(0)
+    tot_counts = [0] * len(channel_list)
+    mask_counts = [0] * len(channel_list)
+    mask_block_counts = [0] * len(channel_list)
+    
+    lib.getCounts_and_return.argtypes = [ctypes.c_char_p * num_files, ctypes.c_int, ctypes.c_int, ctypes.py_object, ctypes.py_object, ctypes.py_object, ctypes.py_object, ctypes.POINTER(ctypes.c_double), ctypes.POINTER(ctypes.c_double)]
+    start_time = time.time()
+    lib.getCounts_and_return(ctypes_file_list, num_files,16, channel_list, mask_counts, tot_counts, mask_block_counts, ctypes.byref(tot_time), ctypes.byref(mask_time))
+    print("Finished in " + str(time.time()-start_time) + "s")
+    time.sleep(1)
+    return (tot_time.value,mask_time.value,tot_counts,mask_counts,mask_block_counts)

@@ -14,5 +14,9 @@ RUN chmod +x /usr/bin/run_command.sh
 COPY jupyter_config /root/.jupyter
 COPY pythonDLLCPU.so /usr/local/lib/
 
+RUN pip install jupyter_contrib_nbextensions
+#RUN jupyter nbextensions_configurator enable --user
+#RUN jupyter nbextension enable scroll_down/main
+
 ENTRYPOINT ["/usr/bin/run_command.sh"]
 CMD [""]

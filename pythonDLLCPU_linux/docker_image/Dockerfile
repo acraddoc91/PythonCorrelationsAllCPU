@@ -5,6 +5,7 @@ RUN pip install numpy scipy jupyter wurlitzer
 RUN apt-get install -y libhdf5-cpp-100 cifs-utils
 RUN mkdir /NAS
 RUN mkdir /home/rbry
+RUN pip install jupyter_contrib_nbextensions psutil
 
 COPY corrLib.py /usr/local/lib/python3.6/site-packages/
 COPY run_command.sh /usr/bin/
@@ -14,7 +15,6 @@ RUN chmod +x /usr/bin/run_command.sh
 COPY jupyter_config /root/.jupyter
 COPY pythonDLLCPU.so /usr/local/lib/
 
-RUN pip install jupyter_contrib_nbextensions
 #RUN jupyter nbextensions_configurator enable --user
 #RUN jupyter nbextension enable scroll_down/main
 
